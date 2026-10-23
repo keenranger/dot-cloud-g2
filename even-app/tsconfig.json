@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "src/main.ts",
+    "src/protocol.ts",
+    "src/voice-flow.ts",
+    "src/message-history.ts",
+    "src/wake-detector.ts",
+    "src/wake-worker.ts",
+    "src/wake-engine.ts",
+    "src/wake-name.ts",
+    "src/audio.ts",
+    "src/wake-gate.ts"
+  ]
+}

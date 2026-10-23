@@ -1,0 +1,67 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #122233;
+  background: #f5f7fa;
+}
+main {
+  max-width: 38rem;
+  margin: auto;
+  padding: 1.25rem;
+}
+label {
+  display: block;
+  margin-top: 1rem;
+}
+input,
+textarea,
+button {
+  font: inherit;
+  box-sizing: border-box;
+  max-width: 100%;
+}
+input,
+textarea {
+  width: 100%;
+  padding: 0.8rem;
+  border: 1px solid #627384;
+  border-radius: 0.4rem;
+}
+button {
+  min-height: 48px;
+  margin: 0.6rem 0.4rem 0.6rem 0;
+  padding: 0.7rem 1rem;
+  background: #123d66;
+  color: white;
+  border: 0;
+  border-radius: 0.4rem;
+}
+button:disabled {
+  background: #65717c;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #a65000;
+  outline-offset: 3px;
+}
+fieldset {
+  border: 1px solid #8394a4;
+}
+#reply {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+section {
+  margin-top: 1.5rem;
+}
+#status,
+#display {
+  font-weight: 600;
+}
+
+input[type="checkbox"] {
+  width: 1.3rem;
+  height: 1.3rem;
+  margin-right: 0.6rem;
+  vertical-align: middle;
+}

@@ -1,0 +1,25 @@
+{
+  "name": "even-g2-dots-cloud-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --experimental-strip-types --test src/*.test.ts",
+    "lint": "oxlint src",
+    "format": "oxfmt .",
+    "manifest": "node scripts/manifest.mjs",
+    "prebuild": "node scripts/verify-wake-assets.mjs",
+    "pretest": "node scripts/verify-wake-assets.mjs"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "0.0.16"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.41.0",
+    "oxlint": "^1.25.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2"
+  }
+}

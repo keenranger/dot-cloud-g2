@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>G2 · Dot Cloud</title>
+  </head>
+  <body>
+    <main>
+      <h1>G2 · Dot Cloud</h1>
+      <p>Mac 없이 음성을 Dot으로 보내고, 답변을 안경에서 확인합니다.</p>
+      <p id="status" role="status" aria-live="polite">Even Hub 연결 확인 중</p>
+      <form id="pair">
+        <fieldset>
+          <legend>서버 연결</legend>
+          <label for="origin">HTTPS 서버 주소</label
+          ><input id="origin" type="url" required placeholder="https://your-site.example" autocomplete="url" /><label
+            for="code"
+            >일회용 연결 코드</label
+          ><input id="code" required autocomplete="one-time-code" /><button>연결</button>
+        </fieldset>
+      </form>
+      <button id="disconnect" hidden>연결 해제 · 저장된 토큰 지우기</button>
+      <section aria-labelledby="voice">
+        <h2 id="voice">메시지 보내기</h2>
+        <p>G2에서 길게 누른 채 말하고 손을 떼면 전사 후 자동으로 Dot에 전송합니다. 최대 30초입니다.</p>
+        <label
+          ><input id="auto-send" type="checkbox" checked />음성 전사 후 자동 전송 (끄면 전사 내용을 검토하고
+          전송)</label
+        >
+        <label><input id="wake-enabled" type="checkbox" />Hey dots 로컬 음성 호출 켜기 (마이크 계속 사용)</label>
+        <p id="wake-status" role="status" aria-live="polite">Hey dots 꺼짐 · 마이크를 열지 않습니다.</p>
+        <p>
+          앱이 열려 있을 때만 동작합니다. 영어 발음 Hey dots 뒤에 질문을 말하면, 호출 뒤 질문만 서버로 전사·전송합니다.
+          한국어식 발음 인식 정확도는 확인되지 않았습니다.
+        </p>
+        <button id="record" disabled>녹음 시작</button><button id="stop" disabled>녹음 중지 · 전사</button
+        ><label for="text">보낼 내용 (음성 대신 직접 입력 가능)</label
+        ><textarea id="text" rows="4" maxlength="8000"></textarea><button id="send" disabled>Dot에 전송</button>
+      </section>
+      <section aria-labelledby="reply-title">
+        <h2 id="reply-title">Dot 답변</h2>
+        <p id="message-position" role="status">아직 받은 메시지가 없습니다.</p>
+        <button id="prev-message" disabled>이전 메시지</button><button id="next-message" disabled>다음 메시지</button>
+        <p id="reply" aria-live="polite">답변을 기다립니다.</p>
+        <button id="prev">이전 페이지</button><button id="next">다음 페이지</button>
+        <p id="display" role="status">G2 표시 확인 전</p>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

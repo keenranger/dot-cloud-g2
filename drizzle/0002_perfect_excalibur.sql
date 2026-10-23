@@ -1,0 +1,1 @@
+CREATE INDEX `relay_lookup_idx` ON `relay_records` (`kind`,`id`);

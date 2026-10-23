@@ -1,0 +1,3 @@
+public/wake-assets/**
+dist/**
+node_modules/**

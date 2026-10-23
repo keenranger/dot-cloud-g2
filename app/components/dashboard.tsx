@@ -13,7 +13,7 @@ type Pairing = {
   code: string;
   expiresAt: string;
 };
-const dotPrompt = `이 G2 Bridge의 MCP 도구를 사용해 session "g2"의 "utterance.created" 이벤트를 구독해 줘. 새 음성 입력을 받으면 한국어로 답하고, reply_to_g2 도구에 받은 것과 동일한 utterance_id와 한국어 답변 text를 보내 줘. 이벤트 전달이 실제로 확인되기 전에는 연결되었다고 말하지 마.`;
+const dotPrompt = `G2 Bridge 플러그인의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 입력을 받으면 한국어로 답하고, reply_to_g2 도구에 받은 것과 동일한 utterance_id와 한국어 답변 text를 보내 줘. 이벤트 전달이 실제로 확인되기 전에는 연결되었다고 말하지 마.`;
 
 export default function Dashboard({ displayName }: { displayName: string }) {
   const [origin, setOrigin] = useState("");
@@ -140,10 +140,10 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       <div className="setup-grid">
         <section className="setup-card" aria-labelledby="pair-title">
           <span className="step">01</span>
-          <h3 id="pair-title">Even Hub와 페어링</h3>
+          <h3 id="pair-title">연결 1: Even Hub 기기 페어링</h3>
           <p>
-            휴대폰의 Even Hub에서 G2 Bridge 앱을 열고, 서버 주소와 아래 연결 코드를 입력하세요. 안경이 휴대폰에 연결되어
-            있어야 합니다.
+            G2 안경과 이 서버를 잇는 연결입니다. ChatGPT 연결과는 별개입니다. 휴대폰의 Even Hub에서 G2 Bridge 앱을 열고,
+            아래 서버 주소와 연결 코드를 입력하세요. 안경이 휴대폰에 연결되어 있어야 합니다.
           </p>
           <AddressField label="Even Hub 서버 주소" value={origin} onCopy={copy} />
           <p className="helper">코드는 한 번만 사용할 수 있습니다. 연결할 때 생성하세요.</p>
@@ -170,10 +170,12 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         </section>
         <section className="setup-card" aria-labelledby="dot-title">
           <span className="step">02</span>
-          <h3 id="dot-title">ChatGPT의 Dot에 연결</h3>
+          <h3 id="dot-title">연결 2: ChatGPT MCP 서버 추가</h3>
           <p>
-            내 Dot에 이 서버의 MCP 연결을 추가한 다음, 아래 요청을 보내세요. 구독 등록과 실제 이벤트 전달은 각각
-            확인해야 합니다.
+            Dot과 이 서버를 잇는 연결로, Even Hub 연결 코드는 쓰지 않습니다. 이 사이트의 MCP 플러그인이 ChatGPT에
+            설치되어 있어야 합니다. 없다면 데스크톱 브라우저의 ChatGPT 웹에서 아래 주소를 사용자 지정 MCP 서버로
+            추가하고 설치하세요. 그다음 Dot에 아래 요청을 보내 이벤트 구독을 요청하세요. 같은 Dot을 모바일 앱에서도
+            이어서 쓸 수 있지만, 구독 생성과 휴대폰 앱에서의 이벤트 전달은 아직 확인되지 않았습니다.
           </p>
           <AddressField label="Dot MCP 서버 주소" value={origin ? `${origin}/mcp` : ""} onCopy={copy} />
           <label className="sr-only" htmlFor="dot-prompt">
@@ -207,8 +209,8 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         <div>
           <h3>G2에서 말하고, 답변 확인하기</h3>
           <p>
-            페어링과 Dot 구독을 마치면 Even Hub 앱에서 음성을 입력하세요. Dot이 받은 입력에 답하면 G2 화면에 표시됩니다.
-            현재 이벤트 게이트웨이와 실제 기기 왕복 검증은 대기 중입니다.
+            두 연결과 Dot 구독을 마치면 Even Hub 앱에서 입력하세요. Dot이 받은 입력에 답하면 G2 화면에 표시되도록
+            설계되어 있습니다. 실제 Dot 이벤트 전달과 기기 왕복은 아직 검증되지 않았습니다.
           </p>
         </div>
         <span className="pending-badge">실기기 검증 대기</span>

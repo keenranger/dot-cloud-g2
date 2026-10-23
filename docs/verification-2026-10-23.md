@@ -24,7 +24,7 @@ The official Even Hub CLI 0.1.14 accepted a local fixture package with SDK 0.0.1
 
 This is packaging evidence only. Do not install, upload, or distribute the fixture as a usable app. Generate a new manifest with the actual deployed origin and create a new package before the real device test. Even Hub acceptance is still unverified.
 
-## External gates still open
+## External gates at the initial local snapshot
 
 - No Site has been registered or deployed; `.openai/hosting.json` has no `project_id`.
 - Hosted ChatGPT authentication, identity-header stripping, owner allowlist, and device bearer/CORS behavior are unverified.
@@ -37,3 +37,16 @@ The requested account/device round trip is not complete. Local tests and the pac
 ## Independent checks
 
 Managed Claude Opus 5.5 sessions investigated the official protocol and reviewed cloud authorization, transactions/retries, companion response ordering/history, and the local wake integration. A separate scoped Codex read-only pass independently found event-recovery and companion ordering/history issues; those findings received fixes and deterministic tests. The wake review's stale prompt issue was also fixed and tested. Neither review role produced physical-device or hosted-account evidence.
+
+## Subsequent hosted and user evidence
+
+The initial snapshot above predates the following results and is not the current deployment state.
+
+- Public Site version 1 deployed successfully at `https://hey-dots-g2.keenranger.chatgpt.site`, from signed commit `d987e90e19aa5c16f1979eaf31795b0fe7db87bd`. Native deployment ID: `appgdep_6adb0c3021d081918bc3106c61f32d09`.
+- The runtime now scopes each signed-in user independently; it no longer uses a singleton owner allowlist. Shared STT billing remains disabled.
+- Anonymous `/api/status` and the same request with a forged `oai-authenticated-user-id` both returned 401. The device pairing OPTIONS request returned 204 with the expected origin, method, and header policy. This does not yet prove every device request path.
+- Browser Sign in with ChatGPT reached the real hosted dashboard. After refresh, both the dashboard and native MCP status reported one paired device.
+- The generated Site plugin was already installed. Native MCP status and pending-utterance reads succeeded.
+- A proactive message sent through the native MCP tool was durably stored. The user confirmed that its text appeared on the physical G2. This proves that one outbound tool-to-server-to-device path; it does not prove microphone capture, a Dot reply, event delivery, or operation while the computer is off.
+- The latest observed status still has `subscribed=false`, `eventTransport=unverified`, and `sttConfigured=false`. Actual cloud Dot subscription and a correlated incoming-text/reply round trip remain open.
+- The user reported uploading the actual 0.1.0 Even Hub package. Version 0.1.1 was subsequently packaged locally with the relay origin prefilled; it has not been uploaded by the agent. SHA-256: `2323e349977f82099920ec680bbef9f182ccfec36f9f9aa0070d48c19f399c26`.

@@ -7,6 +7,14 @@ export class RelayError extends Error {
     this.status = status;
   }
 }
+// ChatGPT MCP Events reports failed callback verification as CallbackEndpointError with a categorized reason.
+export class CallbackEndpointError extends RelayError {
+  readonly reason: "challenge_failed" | "timeout" | "connection_refused" | "http_4xx" | "http_5xx";
+  constructor(reason: CallbackEndpointError["reason"]) {
+    super(400, "Callback verification failed");
+    this.reason = reason;
+  }
+}
 export type RecordValue = { owner: string; kind: string; id: string; value: string; expires_at: number | null };
 export interface Store {
   get(owner: string, kind: string, id: string): Promise<RecordValue | null>;
@@ -47,16 +55,20 @@ type Utterance = {
 const text = z.string().trim().min(1).max(8000);
 export const utteranceInput = z.object({ id: z.string().uuid(), text: text.max(4000) }).strict();
 const sessionArgs = z.object({ session_id: z.literal("g2") }).strict();
+// MCP 2026-07-28 requests carry protocol version and client capabilities in params._meta.
+const requestMeta = z.record(z.string(), z.unknown()).optional();
 const delivery = z
   .object({ mode: z.literal("webhook"), url: z.string().max(2048), secret: z.string().max(100) })
   .strict();
 export const subscribeInput = z
   .object({
+    _meta: requestMeta,
     name: z.literal("utterance.created"),
     arguments: sessionArgs,
     delivery,
     cursor: z.null().optional(),
-    ttlMs: z.number().int().positive().max(86_400_000).nullable().optional(),
+    // TTL is a suggestion; the grant is clamped rather than rejected.
+    ttlMs: z.number().int().nonnegative().nullable().optional(),
   })
   .strict();
 export async function hash(value: string) {
@@ -240,19 +252,29 @@ export class Relay {
       id,
       url: params.delivery.url,
       secret: params.delivery.secret,
-      expiresAt: this.now() + (params.ttlMs ?? 3_600_000),
+      expiresAt: this.now() + Math.min(86_400_000, Math.max(60_000, params.ttlMs ?? 3_600_000)),
     };
     const challenge = crypto.randomUUID();
+    let response: { status: number; body: string };
     try {
-      const response = await this.transport(destination, `verify_${crypto.randomUUID()}`, {
+      response = await this.transport(destination, `verify_${crypto.randomUUID()}`, {
         type: "verification",
         challenge,
       });
-      if (response.status < 200 || response.status >= 300 || JSON.parse(response.body).challenge !== challenge)
-        throw new Error();
-    } catch {
-      throw new RelayError(400, "Callback verification failed");
+    } catch (error) {
+      throw new CallbackEndpointError(
+        error instanceof Error && error.name === "TimeoutError" ? "timeout" : "connection_refused",
+      );
     }
+    if (response.status >= 500) throw new CallbackEndpointError("http_5xx");
+    if (response.status < 200 || response.status >= 300) throw new CallbackEndpointError("http_4xx");
+    let echoed: unknown;
+    try {
+      echoed = JSON.parse(response.body).challenge;
+    } catch {
+      /* A non-JSON body cannot echo the challenge. */
+    }
+    if (echoed !== challenge) throw new CallbackEndpointError("challenge_failed");
     const record = this.record(owner, "subscription", "g2", destination, destination.expiresAt);
     const installed = previous
       ? await this.store.compareAndSwap(record, previous.value)
@@ -263,6 +285,7 @@ export class Relay {
   async unsubscribe(owner: string, input: unknown) {
     const params = z
       .object({
+        _meta: requestMeta,
         name: z.literal("utterance.created"),
         arguments: sessionArgs,
         delivery: delivery.omit({ secret: true }),

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RelayError } from "@/lib/relay/core";
+import { CallbackEndpointError, RelayError } from "@/lib/relay/core";
 import { dispatch } from "@/lib/relay/mcp";
 import { failure, json, jsonBody, ownerIdentity, runtime } from "@/lib/relay/http";
 export async function POST(request: Request) {
@@ -19,9 +19,17 @@ export async function POST(request: Request) {
     id = input.id ?? null;
     const { relay, apiKey } = runtime();
     if (input.method.startsWith("notifications/")) return new Response(null, { status: 202 });
-    return json({ jsonrpc: "2.0", id, result: await dispatch(relay, owner, input.method, input.params, !!apiKey) });
+    // MCP 2026-07-28 requires resultType on every result.
+    const result = (await dispatch(relay, owner, input.method, input.params, !!apiKey)) as object;
+    return json({ jsonrpc: "2.0", id, result: { resultType: "complete", ...result } });
   } catch (error) {
     if (error instanceof RelayError && error.status === 401) return failure(error);
+    if (error instanceof CallbackEndpointError)
+      return json({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32015, message: error.message, data: { reason: error.reason } },
+      });
     const code =
       error instanceof RelayError && error.status === 404
         ? -32601

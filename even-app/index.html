@@ -14,10 +14,16 @@
         <fieldset>
           <legend>서버 연결</legend>
           <label for="origin">HTTPS 서버 주소</label
-          ><input id="origin" type="url" required placeholder="https://your-site.example" autocomplete="url" /><label
-            for="code"
-            >일회용 연결 코드</label
-          ><input id="code" required autocomplete="one-time-code" /><button>연결</button>
+          ><input
+            id="origin"
+            type="url"
+            required
+            value="https://hey-dots-g2.keenranger.chatgpt.site"
+            placeholder="https://your-site.example"
+            autocomplete="url"
+          /><label for="code">일회용 연결 코드</label><input id="code" required autocomplete="one-time-code" /><button>
+            연결
+          </button>
         </fieldset>
       </form>
       <button id="disconnect" hidden>연결 해제 · 저장된 토큰 지우기</button>

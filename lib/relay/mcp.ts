@@ -59,6 +59,7 @@ export const eventDefinition = {
     additionalProperties: false,
   },
 };
+const serverInfo = { name: "even-g2-cloud-relay", version: "0.1.0" };
 export async function dispatch(
   relay: Relay,
   owner: string,
@@ -71,7 +72,8 @@ export async function dispatch(
       return {
         supportedVersions: ["2026-07-28"],
         capabilities: { tools: {}, events: {} },
-        serverInfo: { name: "even-g2-cloud-relay", version: "0.1.0" },
+        serverInfo,
+        _meta: { "io.modelcontextprotocol/serverInfo": serverInfo },
       };
     case "tools/list":
       return { tools };

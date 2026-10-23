@@ -226,3 +226,64 @@ test("HTTP and actual D1 isolate two signed-in tenants, ignoring body and device
   assert.equal(speech.status, 503);
   assert.match((await speech.json()).error, /Per-user/);
 });
+
+test("MCP 2026-07-28 requests with per-request _meta subscribe, clamp TTL, and return complete results", async (t) => {
+  const db = database();
+  globalThis.__relayTestEnv.DB = db;
+  let challenge = (payload) => payload.challenge;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const payload = JSON.parse(options.body);
+    return Response.json({ challenge: challenge(payload) });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    db.sqlite.close();
+  });
+  const _meta = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientInfo": { name: "chatgpt", version: "1" },
+  };
+  const discover = await rpc("carol", "server/discover", { _meta });
+  assert.equal(discover.result.resultType, "complete");
+  assert.deepEqual(discover.result.supportedVersions, ["2026-07-28"]);
+  assert.deepEqual(discover.result.capabilities, { tools: {}, events: {} });
+  assert.equal(discover.result._meta["io.modelcontextprotocol/serverInfo"].name, "even-g2-cloud-relay");
+  for (const method of ["tools/list", "events/list"])
+    assert.equal((await rpc("carol", method, { _meta })).result.resultType, "complete");
+  const secret = `whsec_${Buffer.alloc(32, 7).toString("base64")}`;
+  const subscribe = {
+    _meta,
+    name: "utterance.created",
+    arguments: { session_id: "g2" },
+    delivery: { mode: "webhook", url: "https://connectors.api.openai.com/carol", secret },
+    cursor: null,
+    ttlMs: 7 * 86_400_000,
+  };
+  const before = Date.now();
+  const subscription = await rpc("carol", "events/subscribe", subscribe);
+  assert(!subscription.error, JSON.stringify(subscription.error));
+  assert.equal(subscription.result.resultType, "complete");
+  const granted = Date.parse(subscription.result.refreshBefore) - before;
+  assert(granted <= 86_400_000 + 5_000 && granted >= 86_400_000 - 5_000);
+  assert.equal(subscription.result.cursor, null);
+  const status = await rpc("carol", "tools/call", { _meta, name: "get_status", arguments: {} });
+  assert.equal(status.result.resultType, "complete");
+  assert.equal(JSON.parse(status.result.content[0].text).subscribed, true);
+  challenge = () => "wrong";
+  const failed = await rpc("carol", "events/subscribe", {
+    ...subscribe,
+    delivery: { ...subscribe.delivery, url: "https://connectors.api.openai.com/other" },
+  });
+  assert.equal(failed.error.code, -32015);
+  assert.equal(failed.error.data.reason, "challenge_failed");
+  const unsubscribe = await rpc("carol", "events/unsubscribe", {
+    _meta,
+    name: "utterance.created",
+    arguments: { session_id: "g2" },
+    delivery: { mode: "webhook", url: "https://connectors.api.openai.com/carol" },
+  });
+  assert.deepEqual(unsubscribe.result, { resultType: "complete" });
+  assert.equal(JSON.parse((await tool("carol", "get_status")).content[0].text).subscribed, false);
+});

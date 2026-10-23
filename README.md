@@ -59,14 +59,22 @@ Hosted verification must prove that Sites strips forged identity headers, passes
 
 ## Pair and connect
 
+Setup involves two independent connections. The Even Hub device pairing links the G2 companion to this relay with a one-time code and a device bearer token. The ChatGPT MCP connection links Dot to the relay's MCP endpoint at `<origin>/mcp` (hosted: `https://hey-dots-g2.keenranger.chatgpt.site/mcp`). Neither connection substitutes for the other.
+
 1. Open the hosted setup page and use Sign in with ChatGPT.
 2. Review your personal connection status. No account ID configuration is required. Speech input is unavailable until per-user transcription setup is implemented; use typed input to validate the text path.
-3. Connect the Site's generated MCP plugin in ChatGPT. Ask Dot to subscribe to `utterance.created` with session `g2` and call `reply_to_g2` with the event's `utterance_id` and Korean reply text.
-4. Create a one-time pairing code on the setup page.
-5. Build/package `even-app` with the exact deployed HTTPS relay origin in its network whitelist, then install it through Even Hub. Enter the relay origin and pairing code in the companion.
+3. ChatGPT MCP connection, web first: the Site's native MCP plugin must be installed in ChatGPT. If it is not, add `<origin>/mcp` as a custom MCP server on the ChatGPT Plugins page in ChatGPT on the web in a desktop browser and install it, following [Connect a custom MCP server](https://developers.openai.com/api/docs/guides/custom-mcp-server); that guide documents the web flow only. Then ask Dot in chat to subscribe to `utterance.created` with session `g2` and call `reply_to_g2` with the event's `utterance_id` and Korean reply text. Per the MCP Events guide, ChatGPT itself calls `events/subscribe` when a user asks to monitor an event; the plugin exposes no subscribe tool, and the dashboard's subscription status only reports whether that call has reached the relay.
+4. Even Hub device pairing: create a one-time pairing code on the setup page.
+5. Build/package `even-app` with the exact deployed HTTPS relay origin in its network whitelist, then install it through Even Hub. Enter the relay origin (without `/mcp`) and pairing code in the companion.
 6. For the currently available text path, type a message and use the Send button. The companion polls for replies while visible and attempts to page text onto G2. The recording controls and optional automatic submission are implemented in the companion, but cloud transcription is disabled; recording does not establish a working voice path.
 
 Alternatively enable `Hey dots` listening while the companion is active. This does not wake an exited or suspended Even app. The interface shows microphone/listening state, and manual and text controls remain available.
+
+What the fetched OpenAI docs establish, and what they do not:
+
+- [Get started with your dot](https://learn.chatgpt.com/docs/dots/getting-started): a dot can be set up in the ChatGPT mobile app, desktop app, or a desktop browser (mobile web is not supported), and the same dot continues across devices after setup. The page does not describe adding a custom MCP server to a dot.
+- [Connect a custom MCP server](https://developers.openai.com/api/docs/guides/custom-mcp-server): custom servers are added on ChatGPT on the web over SSE or streaming HTTP. Mobile registration is not described.
+- [MCP Events](https://developers.openai.com/plugins/build/mcp-events): events are available in Work chats on ChatGPT web, Work chats in the desktop app with Cloud selected, and Dots, using webhook delivery and MCP protocol version `2026-07-28`. iOS and Android are not mentioned, so event delivery while using a dot from the iPhone app is unverified.
 
 See [the companion README](even-app/README.md) for SDK interaction and build details. A successful server receipt proves storage or callback acceptance, not Dot processing or a visible physical display.
 
@@ -89,6 +97,8 @@ No local check proves these external gates. The goal remains open until the requ
 ## References
 
 - [Even Hub device APIs](https://hub.evenrealities.com/docs/build/device-apis)
+- [ChatGPT dots: getting started](https://learn.chatgpt.com/docs/dots/getting-started)
+- [OpenAI custom MCP server](https://developers.openai.com/api/docs/guides/custom-mcp-server)
 - [OpenAI MCP events](https://developers.openai.com/plugins/build/mcp-events)
 - [OpenAI speech transcription](https://developers.openai.com/api/docs/guides/speech-to-text)
 - [Dot Link reference implementation](https://github.com/YusukeIt0/dot-link)

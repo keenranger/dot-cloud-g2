@@ -14,7 +14,7 @@ First pnpm script execution attempted to rewrite shared dependency shims and was
 
 ## Artifact and remote status
 
-Candidate `dot-cloud-0.4.1-candidate.ehpk`: 7,563,203 bytes, SDK 0.0.16, min Even app 2.2.10, official online packaging completed without warnings. Candidate is local only. Existing name `Dot Cloud` is retained pending user naming decision; it must be aligned across manifest/UI/portal before submission.
+Candidate `dot-cloud-0.4.1-candidate.ehpk`: 7,563,201 bytes, SDK 0.0.16, min Even app 2.2.10, official online packaging completed without warnings. Candidate is local only. Existing name `Dot Cloud` is retained pending user naming decision; it must be aligned across manifest/UI/portal before submission.
 
 Authenticated remote app `app.mark.evendotscloud`: latest 0.4.0 (119653), Private, 7,563,082 bytes, no beta/public channels. Authenticated portal viewed in user's Mark Mac Chrome: `even_dots`, no screenshots, description, privacy/terms or developer information; Submit disabled. The existing name contains “Even” and violates current independent-app naming policy. Do not rename without the user's selected name.
 

@@ -249,7 +249,11 @@ export class Relay {
       deviceCount,
       subscribed: !!subscription,
       pendingCount,
+      // Legacy field: reports server-side transcription only, which is intentionally disabled.
       sttConfigured,
+      // The companion transcribes on the phone directly with Soniox; the relay never sees that key.
+      transcriptionMode: "phone_direct_soniox" as const,
+      phoneKeyConfigured: null,
       eventTransport: "unverified" as const,
       sessionId: "g2",
       delivery: this.deliverySummary(

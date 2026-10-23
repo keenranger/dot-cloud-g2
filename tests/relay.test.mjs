@@ -569,3 +569,14 @@ test("410 and 413 callback responses are not retried; thrown transport errors ar
     assert.equal(delivery[httpStatus ? "exhausted" : "backingOff"], 1);
   }
 });
+
+test("status reports phone-direct transcription without claiming phone key readiness", async () => {
+  const relay = new Relay(new MemoryStore());
+  for (const legacy of [false, true]) {
+    const value = await relay.status("alice", legacy);
+    assert.equal(value.sttConfigured, legacy);
+    assert.equal(value.transcriptionMode, "phone_direct_soniox");
+    assert.equal(value.phoneKeyConfigured, null);
+    assert(!JSON.stringify(value).toLowerCase().includes("apikey"));
+  }
+});

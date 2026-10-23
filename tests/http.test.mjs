@@ -178,6 +178,8 @@ test("HTTP and actual D1 isolate two signed-in tenants, ignoring body and device
     assert.equal(value.deviceCount, 1);
     assert.equal(value.subscribed, true);
     assert.equal(value.sttConfigured, false);
+    assert.equal(value.transcriptionMode, "phone_direct_soniox");
+    assert.equal(value.phoneKeyConfigured, null);
   }
   const messageId = randomUUID();
   for (const user of ["alice", "bob"])
@@ -286,4 +288,20 @@ test("MCP 2026-07-28 requests with per-request _meta subscribe, clamp TTL, and r
   });
   assert.deepEqual(unsubscribe.result, { resultType: "complete" });
   assert.equal(JSON.parse((await tool("carol", "get_status")).content[0].text).subscribed, false);
+});
+
+test("get_status reports unknown phone key and does not claim speech readiness", async (t) => {
+  const db = database();
+  globalThis.__relayTestEnv.DB = db;
+  t.after(() => db.sqlite.close());
+  const listed = await rpc("dave", "tools/list", {});
+  const { description } = listed.result.tools.find((t) => t.name === "get_status");
+  assert.match(description, /phone_direct_soniox/);
+  assert.match(description, /sttConfigured refers only to legacy server-side transcription/);
+  assert.match(description, /Do not infer phone speech readiness/);
+  const value = JSON.parse((await tool("dave", "get_status")).content[0].text);
+  assert.equal(value.sttConfigured, false);
+  assert.equal(value.transcriptionMode, "phone_direct_soniox");
+  assert.equal(value.phoneKeyConfigured, null);
+  assert(!/soniox_api_key|apiKey|audio/i.test(JSON.stringify(value)));
 });

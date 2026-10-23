@@ -38,7 +38,8 @@ export const tools = [
   },
   {
     name: "get_status",
-    description: "Read owner connection status and event transport verification state, without conversation text.",
+    description:
+      "Read owner connection status and event transport verification state, without conversation text. Speech is transcribed on the phone directly (transcriptionMode phone_direct_soniox); sttConfigured refers only to legacy server-side transcription, and phoneKeyConfigured is null because the relay cannot know whether the phone has a key. Do not infer phone speech readiness from either field.",
     inputSchema: empty,
   },
 ];

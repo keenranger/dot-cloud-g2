@@ -2,17 +2,42 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+type DeliveryCategory =
+  | "accepted"
+  | "http_4xx"
+  | "http_5xx"
+  | "http_other"
+  | "timeout"
+  | "network"
+  | "invalid_response";
 type Status = {
   deviceCount: number;
   subscribed: boolean;
   pendingCount: number;
+  // Server-side STT only; the phone's Soniox key is never reported to the server.
   sttConfigured: boolean;
   eventTransport: "unverified";
+  delivery?: {
+    exhausted: number;
+    backingOff: number;
+    acceptedAwaitingReply: number;
+    last: { category: DeliveryCategory; httpStatus: number | null; at: string } | null;
+  };
 };
 type Pairing = {
   code: string;
   expiresAt: string;
 };
+const deliveryLabels: Record<DeliveryCategory, string> = {
+  accepted: "Dot 이벤트 주소가 수신함",
+  http_4xx: "Dot 이벤트 주소가 거절함",
+  http_5xx: "Dot 이벤트 주소 오류",
+  http_other: "예상하지 못한 응답",
+  timeout: "응답 시간 초과",
+  network: "네트워크 오류",
+  invalid_response: "잘못된 응답",
+};
+const sonioxKeyGuide = "https://soniox.com/docs/guides/api-key-permissions";
 const dotPrompt = `G2 Bridge 플러그인의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 입력을 받으면 한국어로 답하고, reply_to_g2 도구에 받은 것과 동일한 utterance_id와 한국어 답변 text를 보내 줘. 이벤트 전달이 실제로 확인되기 전에는 연결되었다고 말하지 마.`;
 
 export default function Dashboard({ displayName }: { displayName: string }) {
@@ -124,11 +149,17 @@ export default function Dashboard({ displayName }: { displayName: string }) {
           value={status ? (status.subscribed ? "구독 등록됨" : "구독 대기") : unavailableStatus}
         />
         <StatusItem label="대기 중인 음성 입력" value={status ? `${status.pendingCount}건` : unavailableStatus} />
-        <StatusItem
-          label="음성 인식"
-          value={status ? (status.sttConfigured ? "서버 설정됨" : "서버 설정 필요") : unavailableStatus}
-        />
+        <StatusItem label="음성 인식" value={status ? "휴대폰 앱에서 확인" : unavailableStatus} />
       </div>
+      {status?.delivery?.last && (
+        <p className="helper">
+          최근 Dot 전달: {deliveryLabels[status.delivery.last.category]}
+          {status.delivery.last.httpStatus ? ` (HTTP ${status.delivery.last.httpStatus})` : ""},{" "}
+          {new Date(status.delivery.last.at).toLocaleString("ko-KR")}. 답변 대기 {status.delivery.acceptedAwaitingReply}
+          건, 재시도 대기 {status.delivery.backingOff}건, 재시도 중단 {status.delivery.exhausted}건. 수신은 Dot이
+          처리했거나 G2에 표시되었다는 뜻이 아닙니다.
+        </p>
+      )}
       <div role="status" aria-live="polite" className="feedback">
         {message}
       </div>
@@ -187,15 +218,41 @@ export default function Dashboard({ displayName }: { displayName: string }) {
           </button>
         </section>
       </div>
-      {status && !status.sttConfigured && (
-        <div className="notice">
-          <strong>음성 인식 서버 설정이 필요합니다.</strong>
-          <p>
-            서버 관리자가 STT 자격 증명을 설정해야 G2의 음성을 텍스트로 바꿀 수 있습니다. 이 화면에는 API 키를 입력하지
-            마세요.
-          </p>
-        </div>
-      )}
+      <section className="notice" aria-labelledby="stt-title">
+        <strong id="stt-title">음성 인식: 휴대폰의 G2 Bridge 앱에 Soniox API 키 입력</strong>
+        <p>
+          음성은 휴대폰에서 Soniox 클라우드로 바로 전송되어 그곳에서 텍스트로 바뀌고(기기 내 음성 인식 아님), 이
+          서버에는 변환된 텍스트만 전달됩니다. 이 사이트에는 API 키를 입력하지 마세요. 서버 관리자 설정도 필요하지
+          않습니다.
+        </p>
+        <ol>
+          <li>
+            Soniox 콘솔에서 본인 계정의 API 키를 만들고 실시간 음성 인식(real-time transcription) 권한을 허용하세요.{" "}
+            <a href={sonioxKeyGuide} target="_blank" rel="noreferrer">
+              Soniox API 키 권한 안내(새 창)
+            </a>
+          </li>
+          <li>휴대폰 Even Hub에서 G2 Bridge 앱의 설정을 열고 키를 붙여 넣으세요.</li>
+          <li>
+            키는 기본적으로 앱을 사용하는 동안에만 메모리에 보관됩니다. 기억하기를 선택하면 Even Hub 앱 저장소에 남으며,
+            같은 설정 화면에서 언제든 지우거나 새 키로 바꿀 수 있습니다.
+          </li>
+        </ol>
+        <p>
+          기억한 키의 안전성은 휴대폰과 Even Hub 앱을 얼마나 믿을 수 있는지에 달려 있으며, 별도 암호화나 유출 방지를
+          보장하지 않습니다. 사용 요금은 본인 Soniox 계정에 청구되고, 변환된 텍스트는 이 서버에 저장된 뒤 Dot에
+          전달됩니다.
+        </p>
+        <p>
+          이 서버는 휴대폰에 키가 입력되었는지 알 수 없으니 휴대폰 앱에서 확인하세요. 서버 측 음성 인식(이전 방식):{" "}
+          {status
+            ? status.sttConfigured
+              ? "서버에 설정되어 있음, 휴대폰 키와는 별개"
+              : "사용 안 함"
+            : unavailableStatus}
+          .
+        </p>
+      </section>
       {status && status.deviceCount > 0 && (
         <div className="device-actions">
           <p>내 계정에 연결된 기기의 접근을 모두 종료합니다. 다시 사용하려면 새 코드로 페어링해야 합니다.</p>
@@ -209,11 +266,12 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         <div>
           <h3>G2에서 말하고, 답변 확인하기</h3>
           <p>
-            두 연결과 Dot 구독을 마치면 Even Hub 앱에서 입력하세요. Dot이 받은 입력에 답하면 G2 화면에 표시되도록
-            설계되어 있습니다. 실제 Dot 이벤트 전달과 기기 왕복은 아직 검증되지 않았습니다.
+            두 연결과 Dot 구독을 마치면 Even Hub 앱에서 말하거나 입력하세요. Dot이 받은 입력에 답하면 G2 화면에
+            표시되도록 설계되어 있습니다. 실제 클라우드 Dot의 구독 등록은 확인되었고, 직접 실행한 MCP 테스트 메시지의 G2
+            표시는 확인됨; 클라우드 Dot 자동 응답과 Mac-off 음성 왕복은 미검증.
           </p>
         </div>
-        <span className="pending-badge">실기기 검증 대기</span>
+        <span className="pending-badge">Mac 없는 왕복 검증 대기</span>
       </section>
     </section>
   );

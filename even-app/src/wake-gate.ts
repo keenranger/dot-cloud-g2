@@ -3,6 +3,8 @@ export interface WakeConditions {
   active: boolean;
   ready: boolean;
   connected: boolean;
+  /** A Soniox key is configured; without it a post-cue clip could not be transcribed. */
+  transcriber: boolean;
   busy: boolean;
   manual: boolean;
   draft: boolean;
@@ -10,7 +12,14 @@ export interface WakeConditions {
 /** Listening is opt-in and never competes with a pending clip, draft, or manual recording. */
 export function canListen(state: WakeConditions): boolean {
   return (
-    state.enabled && state.active && state.ready && state.connected && !state.busy && !state.manual && !state.draft
+    state.enabled &&
+    state.active &&
+    state.ready &&
+    state.connected &&
+    state.transcriber &&
+    !state.busy &&
+    !state.manual &&
+    !state.draft
   );
 }
 

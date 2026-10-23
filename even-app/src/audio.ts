@@ -59,3 +59,38 @@ export class PcmRecording {
     return result;
   }
 }
+
+/**
+ * Returns the PCM payload of a mono PCM16 16 kHz WAV by walking its RIFF chunks rather than assuming a
+ * 44-byte header. Anything else is rejected so only the expected format reaches the transcriber.
+ */
+export function wavPcm(wav: Uint8Array): Uint8Array {
+  const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+  const label = (offset: number) => String.fromCharCode(...wav.subarray(offset, offset + 4));
+  const invalid = () => new Error("녹음 데이터 형식이 올바르지 않습니다.");
+  if (wav.byteLength < 12 || label(0) !== "RIFF" || label(8) !== "WAVE") throw invalid();
+  let format = false;
+  for (let offset = 12; offset + 8 <= wav.byteLength; ) {
+    const id = label(offset);
+    const size = view.getUint32(offset + 4, true);
+    const body = offset + 8;
+    if (body + size > wav.byteLength) throw invalid();
+    if (id === "fmt ") {
+      if (
+        size < 16 ||
+        view.getUint16(body, true) !== 1 ||
+        view.getUint16(body + 2, true) !== 1 ||
+        view.getUint32(body + 4, true) !== SAMPLE_RATE ||
+        view.getUint16(body + 12, true) !== 2 ||
+        view.getUint16(body + 14, true) !== 16
+      )
+        throw invalid();
+      format = true;
+    } else if (id === "data") {
+      if (!format || size === 0 || size % 2) throw invalid();
+      return wav.subarray(body, body + size);
+    }
+    offset = body + size + (size % 2); // Chunks are word aligned.
+  }
+  throw invalid();
+}

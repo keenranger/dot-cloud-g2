@@ -21,6 +21,8 @@
     "src/wake-engine.ts",
     "src/wake-name.ts",
     "src/audio.ts",
-    "src/wake-gate.ts"
+    "src/wake-gate.ts",
+    "src/soniox-transcriber.ts",
+    "src/soniox-key.ts"
   ]
 }

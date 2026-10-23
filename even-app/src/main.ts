@@ -9,7 +9,10 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { pages, relayOrigin, wav } from "./protocol.ts";
 import "./style.css";
-import { completeVoice } from "./voice-flow.ts";
+import { completeVoice, draftFor, utteranceBody, type Draft } from "./voice-flow.ts";
+import { wavPcm } from "./audio.ts";
+import { SonioxTranscriptionError, sttMessage, transcribeSonioxClip } from "./soniox-transcriber.ts";
+import { SonioxKey } from "./soniox-key.ts";
 import { MessageHistory, type Reply } from "./message-history.ts";
 import { loadWakeDetector, type WakeDetector } from "./wake-detector.ts";
 import { canListen, finishWakeClip } from "./wake-gate.ts";
@@ -48,12 +51,46 @@ let wakeDetector: WakeDetector | undefined;
 let wakeMicOpen = false;
 let wakeEpoch = 0;
 let wakeLabel = "마이크 꺼짐";
+// Typed or reviewed text keeps one utterance id until it is accepted, so an identical resend is idempotent on the relay.
+let draft: Draft | undefined;
+const transcriptions = new Set<{ controller: AbortController; wake: boolean }>();
+const NO_KEY =
+  "Soniox 키가 없어 음성 전사를 할 수 없습니다. 설정에 본인 Soniox 키를 입력하거나 직접 입력해 전송하세요.";
+const sonioxKey = new SonioxKey(
+  () => bridge!,
+  () => {
+    // A replaced or removed key cancels transcriptions that started with the previous key.
+    abortTranscriptions(() => true);
+    keyNotice();
+    controls();
+    syncWake();
+  },
+);
+function abortTranscriptions(match: (wake: boolean) => boolean): void {
+  for (const entry of transcriptions) if (match(entry.wake)) entry.controller.abort();
+}
+function keyNotice(): void {
+  // Without a key the checkbox holds the user's pending choice for the next apply.
+  if (sonioxKey.value) el<HTMLInputElement>("soniox-remember").checked = sonioxKey.remembered;
+  // Clearing stays available until removal of a possibly stored key is confirmed.
+  el("soniox-clear").hidden = !sonioxKey.value && !sonioxKey.remembered && !sonioxKey.unconfirmed;
+  el("soniox-status").textContent = !sonioxKey.value
+    ? sonioxKey.unconfirmed
+      ? "키를 지웠지만 Even 앱 저장소 삭제를 확인하지 못했습니다. 다시 지우기를 누르세요."
+      : NO_KEY
+    : sonioxKey.unconfirmed
+      ? "키를 이번 실행에만 사용합니다. Even 앱 저장소 변경을 확인하지 못했으니 이전에 기억한 키가 남아 있을 수 있습니다."
+      : sonioxKey.remembered
+        ? "Soniox 키 설정됨 · 이 기기의 Even 앱 저장소에 기억합니다. 지우기 전까지 남습니다."
+        : "Soniox 키 설정됨 · 메모리에만 보관하며 앱을 닫으면 사라집니다.";
+}
 function wakeAllowed(): boolean {
   return canListen({
     enabled: el<HTMLInputElement>("wake-enabled").checked,
     active: active && !exited,
     ready,
     connected: !!credentials,
+    transcriber: !!sonioxKey.value,
     busy,
     manual: recordingWanted || recording,
     draft: !!el<HTMLTextAreaElement>("text").value.trim(),
@@ -71,10 +108,14 @@ function syncWake(): void {
     wakeNotice(
       wakeMicOpen
         ? "마이크 중지 요청 중"
-        : el<HTMLInputElement>("wake-enabled").checked
-          ? "Hey dots 감지 일시 중지 · 녹음, 처리 또는 작성 중에는 듣지 않습니다."
-          : "Hey dots 꺼짐 · 마이크를 열지 않습니다.",
+        : !el<HTMLInputElement>("wake-enabled").checked
+          ? "Hey dots 꺼짐 · 마이크를 열지 않습니다."
+          : !sonioxKey.value
+            ? "Hey dots 사용 불가 · Soniox 키가 없어 마이크를 열지 않습니다."
+            : "Hey dots 감지 일시 중지 · 녹음, 처리 또는 작성 중에는 듣지 않습니다.",
     );
+    // Turning Hey dots off withdraws a post-cue clip that is still being transcribed.
+    if (!el<HTMLInputElement>("wake-enabled").checked) abortTranscriptions((wake) => wake);
     queueMic(async () => {
       wakeDetector?.dispose();
       wakeDetector = undefined;
@@ -86,9 +127,11 @@ function syncWake(): void {
         wakeMicOpen = false;
       }
       wakeNotice(
-        el<HTMLInputElement>("wake-enabled").checked
-          ? "Hey dots 일시 중지 · 마이크 꺼짐"
-          : "Hey dots 꺼짐 · 마이크 꺼짐",
+        !el<HTMLInputElement>("wake-enabled").checked
+          ? "Hey dots 꺼짐 · 마이크 꺼짐"
+          : !sonioxKey.value
+            ? "Hey dots 사용 불가 · Soniox 키 없음 · 마이크 꺼짐"
+            : "Hey dots 일시 중지 · 마이크 꺼짐",
       );
     });
     return;
@@ -120,7 +163,7 @@ function syncWake(): void {
                   clip,
                   canUpload: () =>
                     deliveryEpoch === wakeEpoch && active && el<HTMLInputElement>("wake-enabled").checked,
-                  upload: (clip) => processClip(new Uint8Array(clip), version),
+                  upload: (clip) => processClip(wavPcm(clip), version, true),
                   restore: () => {
                     if (history.selected) showSelectedReply();
                     else {
@@ -177,7 +220,8 @@ function syncWake(): void {
 const report = (e: unknown) => status(e instanceof Error ? e.message : "작업을 완료하지 못했습니다.");
 const current = (version: number) => !exited && generation === version;
 function controls(): void {
-  el<HTMLButtonElement>("record").disabled = !ready || !credentials || busy || recordingWanted || recording || !active;
+  el<HTMLButtonElement>("record").disabled =
+    !ready || !credentials || !sonioxKey.value || busy || recordingWanted || recording || !active;
   el<HTMLButtonElement>("stop").disabled = !recordingWanted && !recording;
   el<HTMLButtonElement>("send").disabled =
     !credentials || busy || recordingWanted || !el<HTMLTextAreaElement>("text").value.trim();
@@ -219,6 +263,7 @@ function cancelRequests(): void {
   clearTimeout(pollTimer);
   for (const request of requests) request.abort();
   requests = new Set();
+  abortTranscriptions(() => true);
 }
 function renderDisplay(): void {
   const version = ++displayVersion;
@@ -306,25 +351,54 @@ async function poll(): Promise<void> {
 function queueMic(action: () => Promise<void>): void {
   micQueue = micQueue.then(action).catch(report).finally(controls);
 }
-async function processClip(clip: Uint8Array<ArrayBuffer>, version: number): Promise<void> {
+function showNotice(text: string): void {
+  status(text);
+  selectedPages = pages(text);
+  page = 0;
+  renderDisplay();
+}
+/** Audio goes from the phone straight to Soniox with the user's key; only the transcript reaches the relay. */
+async function processClip(pcm: Uint8Array, version: number, wake: boolean): Promise<void> {
   if (!current(version) || !active) return;
-  status("음성 전사 중");
+  const key = sonioxKey.value;
+  if (!key) return showNotice(NO_KEY);
+  const keyRevision = sonioxKey.revision;
+  const id = crypto.randomUUID();
+  const entry = { controller: new AbortController(), wake };
+  transcriptions.add(entry);
+  const live = () =>
+    current(version) &&
+    active &&
+    !entry.controller.signal.aborted &&
+    sonioxKey.revision === keyRevision &&
+    (!wake || el<HTMLInputElement>("wake-enabled").checked);
+  status("음성 전사 중 · Soniox로 직접 전송");
   selectedPages = ["음성 전사 중 · 아직 전송 전"];
   page = 0;
   renderDisplay();
-  await completeVoice({
-    transcribe: async () => (await request<{ text: string }>("/api/device/transcribe", "POST", clip, "audio/wav")).text,
-    current: () => current(version) && active,
-    automatic: () => el<HTMLInputElement>("auto-send").checked,
-    review: (text) => {
-      el<HTMLTextAreaElement>("text").value = text;
-      status("전사 완료 · 자동 전송을 끈 경우 내용을 확인한 뒤 전송하세요.");
-    },
-    send: (text) => sendText(text, version),
-  });
+  try {
+    await completeVoice({
+      transcribe: () => transcribeSonioxClip(pcm, { credential: () => key, signal: entry.controller.signal }),
+      current: live,
+      automatic: () => el<HTMLInputElement>("auto-send").checked,
+      review: (text) => {
+        el<HTMLTextAreaElement>("text").value = text;
+        draft = { id, text };
+        status("전사 완료 · 자동 전송을 끈 경우 내용을 확인한 뒤 전송하세요.");
+      },
+      send: (text) => sendText(text, version, id),
+    });
+  } catch (e) {
+    if (!(e instanceof SonioxTranscriptionError)) throw e;
+    // Cancellation by a key change or Hey dots off still replaces the "transcribing" notice on G2.
+    if (current(version) && active) showNotice(sttMessage(e));
+  } finally {
+    transcriptions.delete(entry);
+  }
 }
 function startRecording(): void {
   if (!ready || !credentials || recordingWanted || recording || busy || !active || !bridge) return;
+  if (!sonioxKey.value) return showNotice(NO_KEY);
   recordingWanted = true;
   syncWake();
   chunks = [];
@@ -373,7 +447,7 @@ function stopRecording(discard: boolean): void {
     busy = true;
     controls();
     try {
-      await processClip(wav(captured), version);
+      await processClip(wavPcm(wav(captured)), version, false);
     } catch (e) {
       if (current(version)) report(e);
     } finally {
@@ -392,19 +466,16 @@ el("next").onclick = () => turn(1);
 el("prev-message").onclick = () => moveMessage(-1);
 el("next-message").onclick = () => moveMessage(1);
 el("text").oninput = () => {
+  if (!el<HTMLTextAreaElement>("text").value.trim()) draft = undefined;
   controls();
   syncWake();
 };
 el("wake-enabled").onchange = syncWake;
-async function sendText(text: string, version: number): Promise<void> {
+async function sendText(text: string, version: number, id: string): Promise<void> {
   if (!current(version) || !active) return;
   const replyRevision = history.revision;
   status("서버로 전송 중 · 아직 저장 확인 전");
-  const result = await request<{ status: string }>(
-    "/api/device/utterances",
-    "POST",
-    JSON.stringify({ id: crypto.randomUUID(), text }),
-  );
+  const result = await request<{ status: string }>("/api/device/utterances", "POST", utteranceBody(id, text));
   if (!current(version) || !active) return;
   const message =
     result.status === "accepted"
@@ -420,6 +491,7 @@ async function sendText(text: string, version: number): Promise<void> {
     } else void poll();
   }
   el<HTMLTextAreaElement>("text").value = "";
+  if (draft?.id === id) draft = undefined;
 }
 el("send").onclick = () => {
   const text = el<HTMLTextAreaElement>("text").value.trim();
@@ -428,7 +500,8 @@ el("send").onclick = () => {
   busy = true;
   syncWake();
   controls();
-  void sendText(text, version)
+  draft = draftFor(draft, text, () => crypto.randomUUID());
+  void sendText(text, version, draft.id)
     .catch((e) => {
       if (current(version)) report(e);
     })
@@ -493,6 +566,34 @@ el<HTMLFormElement>("pair").onsubmit = (event) => {
     }
   })().catch(report);
 };
+el<HTMLFormElement>("soniox").onsubmit = (event) => {
+  event.preventDefault();
+  if (!bridge) return status("Even 앱 연결을 확인한 뒤 키를 입력하세요.");
+  const input = el<HTMLInputElement>("soniox-key");
+  const value = input.value;
+  // The key leaves the DOM as soon as it is read, whether or not it is accepted.
+  input.value = "";
+  void sonioxKey.apply(value, el<HTMLInputElement>("soniox-remember").checked).then(
+    () => keyNotice(),
+    (e) => {
+      keyNotice();
+      report(e);
+    },
+  );
+};
+el("soniox-key").onkeydown = (event) => {
+  if (event.isComposing && event.key === "Enter") event.preventDefault();
+};
+el("soniox-remember").onchange = () => {
+  // With no key yet, the choice simply applies when a key is entered.
+  if (!bridge || !sonioxKey.value) return;
+  void sonioxKey.remember(el<HTMLInputElement>("soniox-remember").checked).then(() => keyNotice(), report);
+};
+el("soniox-clear").onclick = () => {
+  if (!bridge) return;
+  el<HTMLInputElement>("soniox-remember").checked = false;
+  void sonioxKey.clear().then(() => keyNotice(), report);
+};
 el("disconnect").onclick = () => {
   cancelRequests();
   stopRecording(true);
@@ -520,6 +621,7 @@ function pause(): void {
   syncWake();
   clearTimeout(pollTimer);
   for (const request of requests) request.abort();
+  abortTranscriptions(() => true);
   stopRecording(true);
   controls();
 }
@@ -592,6 +694,13 @@ void (async () => {
     if (type === OsEventTypeList.SCROLL_TOP_EVENT) turn(-1);
     if (type === OsEventTypeList.SCROLL_BOTTOM_EVENT) turn(1);
   });
+  await sonioxKey.restore().then(
+    () => keyNotice(),
+    () => {
+      keyNotice();
+      status("저장된 Soniox 키를 불러오지 못했습니다. 키를 다시 입력하거나 키 지우기를 누르세요.");
+    },
+  );
   const restoreVersion = generation;
   const saved = await bridge.getLocalStorage(storageKey);
   if (!current(restoreVersion)) return;
@@ -611,4 +720,5 @@ void (async () => {
   syncWake();
   void poll();
 })().catch(report);
+keyNotice();
 controls();

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": [
+    "src/soniox-transcriber.test.ts",
+    "src/soniox-key.test.ts",
+    "src/audio.test.ts",
+    "src/voice-relay.test.ts"
+  ]
+}

@@ -27,9 +27,35 @@
         </fieldset>
       </form>
       <button id="disconnect" hidden>연결 해제 · 저장된 토큰 지우기</button>
+      <form id="soniox">
+        <fieldset>
+          <legend>음성 전사 (본인 Soniox 키)</legend>
+          <p>
+            녹음은 이 휴대폰에서 Soniox(stt-rt.soniox.com)로 직접 보내 전사하고, 서버에는 전사된 텍스트만 보냅니다. 키와
+            오디오는 서버로 보내지 않습니다. Soniox 콘솔에서 실시간 음성 인식 권한만 있는 전용 키를 만들어 쓰세요.
+          </p>
+          <label for="soniox-key">Soniox API 키</label
+          ><input
+            id="soniox-key"
+            type="password"
+            required
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            aria-describedby="soniox-status"
+          /><label
+            ><input id="soniox-remember" type="checkbox" />이 기기에 키 기억하기 (끄면 메모리에만 두고 앱을 닫으면
+            사라짐. Even 앱 저장소에 저장되며 암호화 여부는 확인되지 않았습니다.)</label
+          ><button>키 적용</button><button id="soniox-clear" type="button" hidden>키 지우기</button>
+          <p id="soniox-status" role="status" aria-live="polite">Soniox 키가 설정되지 않았습니다.</p>
+        </fieldset>
+      </form>
       <section aria-labelledby="voice">
         <h2 id="voice">메시지 보내기</h2>
-        <p>G2에서 길게 누른 채 말하고 손을 떼면 전사 후 자동으로 Dot에 전송합니다. 최대 30초입니다.</p>
+        <p>
+          G2에서 길게 누른 채 말하고 손을 떼면 Soniox로 전사한 뒤 자동으로 Dot에 전송합니다. 최대 30초이며 Soniox 키가
+          필요합니다.
+        </p>
         <label
           ><input id="auto-send" type="checkbox" checked />음성 전사 후 자동 전송 (끄면 전사 내용을 검토하고
           전송)</label
@@ -37,8 +63,8 @@
         <label><input id="wake-enabled" type="checkbox" />Hey dots 로컬 음성 호출 켜기 (마이크 계속 사용)</label>
         <p id="wake-status" role="status" aria-live="polite">Hey dots 꺼짐 · 마이크를 열지 않습니다.</p>
         <p>
-          앱이 열려 있을 때만 동작합니다. 영어 발음 Hey dots 뒤에 질문을 말하면, 호출 뒤 질문만 서버로 전사·전송합니다.
-          한국어식 발음 인식 정확도는 확인되지 않았습니다.
+          앱이 열려 있을 때만 동작합니다. 영어 발음 Hey dots 뒤에 질문을 말하면, 호출 뒤 질문만 Soniox로 전사하고 그
+          텍스트를 서버로 전송합니다. 한국어식 발음 인식 정확도는 확인되지 않았습니다.
         </p>
         <button id="record" disabled>녹음 시작</button><button id="stop" disabled>녹음 중지 · 전사</button
         ><label for="text">보낼 내용 (음성 대신 직접 입력 가능)</label

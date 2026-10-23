@@ -68,10 +68,18 @@
       "download": "vad"
     },
     "THIRD-PARTY-NOTICES.txt": {
-      "bytes": 427950,
-      "sha256": "4d56f42f5bfbda167cbd22abeb3a18ea4a0ac24da08a0331f9809687592c85e7",
-      "gzip": "THIRD-PARTY-NOTICES.txt.gz",
-      "gzipSha256": "ae78a359ab4b8bfb1286ee52c071367a0b06239a842c9bba773012174fde8db9"
+      "bytes": 427971,
+      "sha256": "676d3b62371edc2cb1f0dcbf10bbd5aaf31db6ad739bac176debc949c7d88178",
+      "local": "THIRD-PARTY-NOTICES.txt",
+      "localPatch": {
+        "description": "Line 3 documentation pointer changed from docs/wake-word.md to even-app/public/REFERENCE-WAKE-WORD.md; license texts are otherwise byte-identical to upstream.",
+        "upstream": {
+          "source": "Dot Link fe00d2e2c43686eca572ce5694612b505843a820 distribution/wake/THIRD-PARTY-NOTICES.txt.gz",
+          "bytes": 427950,
+          "sha256": "4d56f42f5bfbda167cbd22abeb3a18ea4a0ac24da08a0331f9809687592c85e7",
+          "gzipSha256": "ae78a359ab4b8bfb1286ee52c071367a0b06239a842c9bba773012174fde8db9"
+        }
+      }
     },
     "name-vocabulary.json": {
       "bytes": 14591,

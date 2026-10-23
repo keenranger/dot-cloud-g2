@@ -1,6 +1,6 @@
 {
   "name": "even-g2-dots-cloud-companion",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "node --experimental-strip-types --test src/*.test.ts",
     "lint": "oxlint src",
+    "typecheck:test": "tsc -p tsconfig.test.json",
     "format": "oxfmt .",
     "manifest": "node scripts/manifest.mjs",
     "prebuild": "node scripts/verify-wake-assets.mjs",

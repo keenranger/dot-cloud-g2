@@ -6,13 +6,14 @@ const permitted: WakeConditions = {
   active: true,
   ready: true,
   connected: true,
+  transcriber: true,
   busy: false,
   manual: false,
   draft: false,
 };
-test("local listening requires explicit opt-in, foreground app, initialized G2 and pairing", () => {
+test("local listening requires explicit opt-in, foreground app, initialized G2, pairing and a Soniox key", () => {
   assert.equal(canListen(permitted), true);
-  for (const flag of ["enabled", "active", "ready", "connected"] as const)
+  for (const flag of ["enabled", "active", "ready", "connected", "transcriber"] as const)
     assert.equal(canListen({ ...permitted, [flag]: false }), false, flag);
 });
 test("STT/send, manual recording and unsent review draft each prevent wake capture", () => {

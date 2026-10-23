@@ -494,3 +494,78 @@ test("unsubscribe cannot delete a verified replacement installed after its read"
   await relay.unsubscribe("alice", { ...unsubscribe, delivery: { mode: "webhook", url: replacement.delivery.url } });
   assert.equal(await store.get("alice", "subscription", "g2"), null);
 });
+
+test("status distinguishes never attempted, backoff, exhausted and unpaired-device delivery without text or URLs", async () => {
+  let now = 1000;
+  const store = new MemoryStore();
+  const transport = async (_destination, _id, payload) => {
+    if (payload.type === "verification") return { status: 200, body: JSON.stringify({ challenge: payload.challenge }) };
+    return { status: 503, body: "private callback detail" };
+  };
+  const relay = new Relay(store, transport, () => now);
+  const paired = await device(relay);
+  const id = randomUUID();
+  await relay.submit(paired, { id, text: "비밀 발화" });
+  let delivery = (await relay.status("alice")).delivery;
+  assert.equal(delivery.neverAttempted, 1);
+  assert.equal(delivery.last, null);
+  await relay.subscribe("alice", params);
+  await relay.messages(paired);
+  delivery = (await relay.status("alice")).delivery;
+  assert.equal(delivery.backingOff, 1);
+  assert.deepEqual(delivery.last, {
+    category: "http_5xx",
+    httpStatus: 503,
+    attempt: 1,
+    at: new Date(now).toISOString(),
+  });
+  for (let attempt = 2; attempt <= 5; attempt++) {
+    now = JSON.parse((await store.get("alice", "utterance", id)).value).nextAttemptAt;
+    await relay.messages(paired);
+  }
+  const status = await relay.status("alice");
+  assert.equal(status.delivery.exhausted, 1);
+  assert.equal(status.delivery.last.attempt, 5);
+  const serialized = JSON.stringify(status);
+  for (const leaked of ["비밀 발화", "private callback detail", "connectors.api.openai.com", secret, paired.id])
+    assert(!serialized.includes(leaked));
+  assert.equal((await relay.status("bob")).delivery.exhausted, 0);
+  const other = await device(relay);
+  await relay.submit(other, { id: randomUUID(), text: "다른 기기" });
+  await relay.revoke("alice", other.id);
+  assert.equal((await relay.status("alice")).delivery.awaitingUnpairedDevice, 1);
+});
+
+test("410 and 413 callback responses are not retried; thrown transport errors are categorized", async () => {
+  for (const [response, category, httpStatus] of [
+    [{ status: 410, body: "" }, "http_4xx", 410],
+    [{ status: 413, body: "" }, "http_4xx", 413],
+    [Object.assign(new Error("timed out"), { name: "TimeoutError" }), "timeout", null],
+    [new TypeError("fetch failed"), "network", null],
+  ]) {
+    let now = 1000;
+    let events = 0;
+    const store = new MemoryStore();
+    const relay = new Relay(
+      store,
+      async (_destination, _id, payload) => {
+        if (payload.type === "verification")
+          return { status: 200, body: JSON.stringify({ challenge: payload.challenge }) };
+        events++;
+        if (response instanceof Error) throw response;
+        return response;
+      },
+      () => now,
+    );
+    const paired = await device(relay);
+    await relay.subscribe("alice", params);
+    await relay.submit(paired, { id: randomUUID(), text: "전송" });
+    now += 600000;
+    await relay.messages(paired);
+    const delivery = (await relay.status("alice")).delivery;
+    assert.equal(delivery.last.category, category);
+    assert.equal(delivery.last.httpStatus, httpStatus);
+    assert.equal(events, httpStatus ? 1 : 2);
+    assert.equal(delivery[httpStatus ? "exhausted" : "backingOff"], 1);
+  }
+});

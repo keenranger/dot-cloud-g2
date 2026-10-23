@@ -1,6 +1,6 @@
 Dot Link optional wake-word runtime: third-party license notices
 
-Runtime sources and local modifications are documented in docs/wake-word.md.
+Runtime sources and local modifications are documented in even-app/public/REFERENCE-WAKE-WORD.md.
 
 ========================================================================
 sherpa-onnx 1.13.8 and KWS model (Apache-2.0)

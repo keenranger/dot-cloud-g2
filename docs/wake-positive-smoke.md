@@ -6,7 +6,7 @@ On 2026-10-23, the shipped local detector produced a `wake` event and a followin
 
 Host: macOS 27.0.1 (26A434), arm64; Node v26.12.0. The installed voice inventory included `Samantha` (`en_US`). No voice was downloaded or installed. `say -o` generated files without audible playback.
 
-Run from `/Users/mark/src/even-g2-dots-cloud`:
+Run from the repository root:
 
 ```sh
 /usr/bin/say -v Samantha -r 150 -o outputs/wake-smoke/positive.aiff 'Hey dots. What time is it?'

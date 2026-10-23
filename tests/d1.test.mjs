@@ -173,6 +173,10 @@ test("D1 retry candidate skips exhausted/backoff/in-flight items and pagination 
         status: "failed",
         deliveryAttempts: 5,
       };
+      if (n === 19) {
+        value.deliveryAttempts = 1;
+        value.nextAttemptAt = Number.MAX_SAFE_INTEGER;
+      }
       if (n === 20) {
         value.deliveryAttempts = 0;
         value.nextAttemptAt = 2000;

@@ -20,7 +20,7 @@ Subsequent project evidence: a separate [sherpa-only synthetic positive smoke](w
 
 | Item | Value | Source |
 |---|---|---|
-| Runtime | sherpa-onnx 1.13.8 WASM (emsdk 4.0.23), commit `11afbd0`; heap 64 MiB initial, 256 MiB max; single thread; WASM SIMD required | `/Users/mark/src/even-g2-dots/distribution/wake/manifest.json`, `even-app/public/REFERENCE-WAKE-WORD.md` |
+| Runtime | sherpa-onnx 1.13.8 WASM (emsdk 4.0.23), commit `11afbd0`; heap 64 MiB initial, 256 MiB max; single thread; WASM SIMD required | Dot Link reference `distribution/wake/manifest.json`, `even-app/public/REFERENCE-WAKE-WORD.md` |
 | KWS model | `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01`, int8, `chunk-16-left-64` | manifest |
 | Files | encoder 4.81 MB + decoder 0.28 MB + joiner 0.16 MB + tokens 5 KB; `runtime.wasm` 12.8 MB (gzip variant exists); `silero_vad.onnx` 0.64 MB | `even-app/public/wake-assets/` |
 | Keyword config | One keyword (`▁HEY▁<NAME>` tokens, `@HEY_DOT`); `keywordsScore: 3`, `keywordsThreshold: 0.1`, `maxActivePaths: 4`, `numTrailingBlanks: 1` | `even-app/src/wake-worker.ts:48-65` |

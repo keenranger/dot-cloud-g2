@@ -1,8 +1,8 @@
-# Even G2 → ChatGPT Dot, without a Mac relay
+# Dot Cloud G2
 
-A Sites-hosted relay and an Even Hub companion. Each user signs in with ChatGPT, pairs their own companion with a one-time code, and connects their own Dot. The intended voice flow delivers utterance events to Dot, then returns its MCP reply to the paired G2. Actual hosted event delivery and physical G2 behavior remain unverified.
+Dot Cloud G2 connects Even G2 to ChatGPT Dot without a Mac relay, using a Sites-hosted relay and an Even Hub companion. Each user signs in with ChatGPT, pairs their own companion with a one-time code, and connects their own Dot. The intended voice flow delivers utterance events to Dot, then returns its MCP reply to the paired G2. Actual hosted event delivery and physical G2 behavior remain unverified.
 
-This project is independent of the upstream Dot Link reference checkout at `/Users/mark/src/even-g2-dots`. It does not install a Mac background service or require Tailscale.
+This project is independent of the upstream Dot Link reference checkout (`even-g2-dots`). It does not install a Mac background service or require Tailscale.
 
 ## Architecture
 

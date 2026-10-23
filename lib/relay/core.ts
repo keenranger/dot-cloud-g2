@@ -40,6 +40,15 @@ export type Transport = (
   payload: unknown,
 ) => Promise<{ status: number; body: string }>;
 export type Device = { owner: string; id: string };
+// Sanitized delivery outcome: no URL, secret, response body, or utterance text is retained.
+type DeliveryOutcome = {
+  category: "accepted" | "http_4xx" | "http_5xx" | "http_other" | "timeout" | "network" | "invalid_response";
+  httpStatus: number | null;
+  attempt: number;
+  at: string;
+};
+// MCP Events: do not retry deliveries that return 410 or 413.
+const noRetry = Number.MAX_SAFE_INTEGER;
 type Utterance = {
   id: string;
   text: string;
@@ -51,6 +60,7 @@ type Utterance = {
   nextAttemptAt?: number;
   deliveryLeaseUntil?: number;
   deliveryLeaseId?: string;
+  lastDelivery?: DeliveryOutcome;
 };
 const text = z.string().trim().min(1).max(8000);
 export const utteranceInput = z.object({ id: z.string().uuid(), text: text.max(4000) }).strict();
@@ -228,10 +238,12 @@ export class Relay {
     return record && record.expires_at! > this.now() ? JSON.parse(record.value) : null;
   }
   async status(owner: string, sttConfigured = false) {
-    const [deviceCount, pendingCount, subscription] = await Promise.all([
+    const [deviceCount, pendingCount, subscription, utterances, devices] = await Promise.all([
       this.store.count(owner, "device"),
       this.store.count(owner, "utterance"),
       this.subscription(owner),
+      this.store.list(owner, "utterance"),
+      this.store.list(owner, "device"),
     ]);
     return {
       deviceCount,
@@ -240,7 +252,38 @@ export class Relay {
       sttConfigured,
       eventTransport: "unverified" as const,
       sessionId: "g2",
+      delivery: this.deliverySummary(
+        utterances.map((r) => JSON.parse(r.value) as Utterance).filter((u) => u.status !== "replied"),
+        new Set(devices.map((r) => JSON.parse(r.value).id as string)),
+      ),
     };
+  }
+  private deliverySummary(utterances: Utterance[], deviceIds: Set<string>) {
+    const now = this.now();
+    const summary = {
+      neverAttempted: 0,
+      inFlight: 0,
+      backingOff: 0,
+      retryReady: 0,
+      exhausted: 0,
+      acceptedAwaitingReply: 0,
+      // Retries are driven only by the originating device's requests.
+      awaitingUnpairedDevice: 0,
+      last: null as DeliveryOutcome | null,
+    };
+    for (const u of utterances) {
+      const attempts = u.deliveryAttempts ?? 0;
+      if (u.status === "accepted") summary.acceptedAwaitingReply++;
+      else if ((u.deliveryLeaseUntil ?? 0) > now) summary.inFlight++;
+      else if (attempts >= 5 || u.nextAttemptAt === noRetry) summary.exhausted++;
+      else if (attempts === 0) summary.neverAttempted++;
+      else if ((u.nextAttemptAt ?? 0) > now) summary.backingOff++;
+      else summary.retryReady++;
+      if (u.status !== "accepted" && attempts < 5 && u.nextAttemptAt !== noRetry && !deviceIds.has(u.deviceId))
+        summary.awaitingUnpairedDevice++;
+      if (u.lastDelivery && (!summary.last || u.lastDelivery.at > summary.last.at)) summary.last = u.lastDelivery;
+    }
+    return summary;
   }
   async subscribe(owner: string, input: unknown) {
     const params = subscribeInput.parse(input);
@@ -341,6 +384,8 @@ export class Relay {
       return current ? (JSON.parse(current.value) as Utterance) : value;
     }
     let accepted = false;
+    let category: DeliveryOutcome["category"];
+    let httpStatus: number | null = null;
     try {
       const response = await this.transport(sub, `evt_${value.id}`, {
         eventId: `evt_${value.id}`,
@@ -350,14 +395,38 @@ export class Relay {
         cursor: null,
       });
       accepted = response.status >= 200 && response.status < 300;
-    } catch {
+      httpStatus = response.status;
+      category = accepted
+        ? "accepted"
+        : response.status >= 500
+          ? "http_5xx"
+          : response.status >= 400
+            ? "http_4xx"
+            : "http_other";
+    } catch (error) {
       /* Failure is durable and eligible for a bounded request-driven retry. */
+      category =
+        error instanceof RelayError
+          ? "invalid_response"
+          : error instanceof Error && error.name === "TimeoutError"
+            ? "timeout"
+            : "network";
     }
+    const settledAt = this.now();
     const settled: Utterance = {
       ...claimed,
       status: accepted ? "accepted" : "failed",
       deliveryLeaseUntil: 0,
-      nextAttemptAt: this.now() + Math.min(60_000, 2_000 * 2 ** (claimed.deliveryAttempts! - 1)),
+      nextAttemptAt:
+        httpStatus === 410 || httpStatus === 413
+          ? noRetry
+          : settledAt + Math.min(60_000, 2_000 * 2 ** (claimed.deliveryAttempts! - 1)),
+      lastDelivery: {
+        category,
+        httpStatus,
+        attempt: claimed.deliveryAttempts!,
+        at: new Date(settledAt).toISOString(),
+      },
     };
     // A reply or a newer lease acquired after process interruption wins over this settlement.
     await this.store.compareAndSwap(this.record(owner, "utterance", value.id, settled), claim.value);

@@ -917,7 +917,7 @@ window.addEventListener("pageshow", () => {
 });
 // Outside the Even app the bridge never appears; say so instead of waiting silently.
 const bridgeWait = setTimeout(() => {
-  if (!bridge) status("Even 앱을 찾지 못했습니다. Even 앱의 Dot Cloud에서 열어 주세요.");
+  if (!bridge) status("Even 앱을 찾지 못했습니다. Even 앱의 Lens MCP for G2에서 열어 주세요.");
 }, 10000);
 // Fences startup restoration from the start, before any await.
 const startup = generation;
@@ -937,7 +937,7 @@ void (async () => {
           width: 560,
           height: 228,
           isEventCapture: 1,
-          content: "Dot Cloud · 휴대폰에서 서버를 연결하세요.",
+          content: "Lens MCP for G2 · 휴대폰에서 서버를 연결하세요.",
         }),
         new TextContainerProperty({
           containerID: 2,

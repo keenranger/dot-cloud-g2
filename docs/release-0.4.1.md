@@ -1,6 +1,6 @@
 # 0.4.1 review candidate — 2026-10-23
 
-Source base: `12d2cb8`; isolated branch `fix/g2-display-recovery`. Original `/Users/mark/orca/workspaces/even-g2-dots-cloud/kelpie` and `/Users/mark/src/even-g2-dots-cloud` preserved. No upload, rename, promotion, review submission or deployment performed.
+Source base: `12d2cb8`; isolated branch `fix/g2-display-recovery`. Original `/Users/mark/orca/workspaces/even-g2-dots-cloud/kelpie` and `/Users/mark/src/even-g2-dots-cloud` preserved. Authorized display rename and Private upload completed. No beta promotion, review submission or deployment performed.
 
 ## Change and evidence
 
@@ -14,9 +14,9 @@ First pnpm script execution attempted to rewrite shared dependency shims and was
 
 ## Artifact and remote status
 
-Candidate `dot-cloud-0.4.1-candidate.ehpk`: 7,563,213 bytes, SDK 0.0.16, min Even app 2.2.10, official online packaging completed without warnings. Candidate is local only. Existing name `Dot Cloud` is retained pending user naming decision; it must be aligned across manifest/UI/portal before submission.
+Release artifact `lens-mcp-for-g2-0.4.1.ehpk`: 7,563,225 bytes, SDK 0.0.16, min Even app 2.2.10, official online packaging completed without warnings. Uploaded and re-read as Private build 119761, version 0.4.1, no channels. SHA-256: `d949fd22ed9757e4e65b83a5309da0bccd6f3d4bbb3b6ddd195786be33c9559e`. Selected display name: `Lens MCP for G2` (15 characters). Package identity and Hey dots cue remain unchanged.
 
-Authenticated remote app `app.mark.evendotscloud`: latest 0.4.0 (119653), Private, 7,563,082 bytes, no beta/public channels. Authenticated portal viewed in user's Mark Mac Chrome: `even_dots`, no screenshots, description, privacy/terms or developer information; Submit disabled. The existing name contains “Even” and violates current independent-app naming policy. Do not rename without the user's selected name.
+Authenticated remote app `app.mark.evendotscloud`: latest 0.4.0 (119653), Private, 7,563,082 bytes, no beta/public channels. Authenticated portal viewed in user's Mark Mac Chrome: `even_dots`, no screenshots, description, privacy/terms or developer information; Submit disabled. The existing name contains “Even” and violates current independent-app naming policy. This historical portal snapshot precedes the authorized Lens MCP for G2 draft rename.
 
 ## Simulator evidence
 
@@ -43,7 +43,7 @@ Record four independent times for one correlated utterance/message: server reply
 
 ## Remaining submission checklist
 
-- Final user-selected name, ≤20 chars and no case-insensitive “Even”; tagline ≤50 chars; matching manifest, glasses and listing.
+- Selected Lens MCP for G2: align manifest, glasses and private listing; tagline ≤50 chars.
 - User-approved public description and release notes in ko/en; describe compatible hardware in description.
 - Developer profile/contact, monochrome icon foreground/background, greyscale cover. Existing icon completeness is unverified.
 - Genuine simulator screenshots matching final branding/build; do not use a phone preview as G2 proof.
@@ -51,3 +51,9 @@ Record four independent times for one correlated utterance/message: server reply
 - Physical beta QA above, source review, private upload authorization, optional beta promotion authorization, final content confirmation. Public review stays portal-only. Published build numbers/artifacts are immutable; listing edits have their own portal review process.
 
 References: https://hub.evenrealities.com/docs/ship/app-submission ; https://hub.evenrealities.com/docs/build/background-lifecycle ; https://hub.evenrealities.com/docs/build/page-lifecycle ; https://hub.evenrealities.com/docs/cli . Checked 2026-10-23.
+
+## Naming and private portal verification
+
+User delegated final naming after being told Lens MCP overlaps with infrastructure products. Selected Lens MCP for G2 (15 characters); brief public exact-name and glasses-category searches found no direct same-category match, not a trademark clearance. Existing Lens MCP Server and Zoho Lens MCP names remain a broader search collision. Manifest, phone title, on-glasses startup/setup notice and private portal now use Lens MCP for G2. Package ID, native storage keys, MCP/automation identity, credentials and Hey dots cue are unchanged. Portal tagline: Your ChatGPT Dot on G2, connected through MCP. Description expressly limits support to the user’s ChatGPT Dot, independent of Even Realities, and disclaims a generic MCP client.
+
+Remote re-read after upload: build 119761, 0.4.1, Private, 7,563,225 bytes, channels [], review null. Portal creator name, icon foreground/background and privacy URL remain empty. Public operator/contact, retention/deletion commitments, legal terms and locked-wake consent remain pending; naming delegation did not approve them.

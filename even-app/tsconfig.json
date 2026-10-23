@@ -23,6 +23,7 @@
     "src/audio.ts",
     "src/wake-gate.ts",
     "src/soniox-transcriber.ts",
-    "src/soniox-key.ts"
+    "src/soniox-key.ts",
+    "src/g2-display.ts"
   ]
 }

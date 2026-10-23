@@ -7,6 +7,8 @@
     "src/soniox-transcriber.test.ts",
     "src/soniox-key.test.ts",
     "src/audio.test.ts",
-    "src/voice-relay.test.ts"
+    "src/voice-relay.test.ts",
+    "src/g2-display.test.ts",
+    "src/protocol.test.ts"
   ]
 }

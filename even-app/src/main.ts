@@ -361,10 +361,10 @@ function renderDisplay(): void {
     .then(async () => {
       if (!ready || !bridge || !active || !current(connectionVersion) || version !== displayVersion) return;
       // Status goes to the header only; an unchanged body is not rewritten, so its native scroll position stays.
-      const headerOk = await g2.show(2, "microphone", g2Header());
-      if (!current(connectionVersion) || version !== displayVersion) return;
       // The whole reply goes to the event-capturing container, which scrolls it natively on G2.
       const ok = await g2.show(1, "reply", content, key);
+      if (!current(connectionVersion) || version !== displayVersion) return;
+      const headerOk = await g2.show(2, "microphone", g2Header());
       if (!current(connectionVersion) || version !== displayVersion) return;
       displayStatus(
         ok && headerOk ? "G2가 표시 갱신을 확인했습니다." : "G2 표시 갱신 실패 · 휴대폰에서 답변을 확인하세요.",
@@ -424,6 +424,7 @@ function turn(delta: number): void {
 }
 async function poll(): Promise<void> {
   if (pollRunning || !active || exited || !credentials) return;
+  clearTimeout(pollTimer);
   const version = generation;
   pollRunning = true;
   try {
@@ -437,7 +438,11 @@ async function poll(): Promise<void> {
       showSelectedReply();
     } else if (history.revision !== revision && selection === replyNotice) restoreReader();
     // New replies behind the reader only change the header position; the body keeps its scroll.
-    else if (history.revision !== revision) renderDisplay();
+    else if (
+      history.revision !== revision ||
+      (ready && (!g2.has(2, g2Header()) || !g2.has(1, segmentContent(parts, part), `${selection}#${part}`)))
+    )
+      renderDisplay();
   } catch (e) {
     if (current(version) && active) report(e);
   } finally {
@@ -895,7 +900,12 @@ function resume(): void {
   void poll();
   renderDisplay();
 }
-document.addEventListener("visibilitychange", () => (document.hidden ? pause() : resume()));
+// Phone visibility is not the glasses session lifecycle. Packaged Even Hub apps can keep
+// running with the phone locked; only pagehide or a host exit tears down the session.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !active) resume();
+  else if (!ready) pause();
+});
 window.addEventListener("pagehide", pause);
 window.addEventListener("pageshow", resume);
 // Outside the Even app the bridge never appears; say so instead of waiting silently.
@@ -936,6 +946,7 @@ void (async () => {
   );
   if (result !== 0) throw new Error("G2 시작 화면을 만들지 못했습니다. Even 앱에서 다시 여세요.");
   ready = true;
+  active = true;
   controls();
   bridge.onEvenHubEvent((event) => {
     if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && wakeMicOpen && wakeAllowed())
@@ -961,6 +972,18 @@ void (async () => {
       return;
     }
     if (!active) return;
+    if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+      // Root-page exit must use the host's confirmation; cancelling leaves this session intact.
+      void bridge!
+        .shutDownPageContainer(1)
+        .then((ok) => {
+          if (!ok && !exited) status("G2 종료 확인창을 열지 못했습니다. 다시 두 번 탭하세요.");
+        })
+        .catch(() => {
+          if (!exited) status("G2 종료 확인창을 열지 못했습니다. 다시 두 번 탭하세요.");
+        });
+      return;
+    }
     if (type === OsEventTypeList.LONG_PRESS_EVENT) startRecording();
     if (type === OsEventTypeList.LONG_PRESS_RELEASE_EVENT) stopRecording(false);
     // Documented as swipe up/down or reaching the top/bottom of natively scrolled text; whether a swipe inside

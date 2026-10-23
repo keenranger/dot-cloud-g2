@@ -16,7 +16,7 @@ writeFileSync(
       package_id: "app.mark.evendotscloud",
       edition: "202601",
       name: "Dot Cloud",
-      version: "0.4.0",
+      version: "0.4.1",
       min_sdk_version: "0.0.16",
       entrypoint: "index.html",
       permissions: [

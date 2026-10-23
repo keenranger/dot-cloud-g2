@@ -73,9 +73,23 @@ test("a rejected or failed update is retried on the next render", async () => {
   assert.equal(await failed, false);
   const thrown = g2.show(1, "reply", "답변", "reply:a#0");
   bridge.writes.splice(0)[0].fail();
-  await assert.rejects(thrown);
+  assert.equal(await thrown, false);
   assert.equal(await shown(g2, bridge, 1, "답변", "reply:a#0"), 1);
   assert.equal(await shown(g2, bridge, 1, "답변", "reply:a#0"), 0);
+});
+
+test("a throwing header does not prevent the reply write and remains eligible for recovery", async () => {
+  const calls: number[] = [];
+  const g2 = new G2Text((id) => {
+    calls.push(id);
+    if (id === 2) throw new Error("host rejected header");
+    return Promise.resolve(true);
+  });
+  assert.equal(await g2.show(2, "microphone", "listening"), false);
+  assert.equal(await g2.show(1, "reply", "답변", "reply:a#0"), true);
+  assert.deepEqual(calls, [2, 1]);
+  assert.equal(g2.has(2, "listening"), false);
+  assert.equal(g2.has(1, "답변", "reply:a#0"), true);
 });
 
 test("has() reports only text show() would skip: same key, acknowledged, not in flight, failed or forgotten", async () => {

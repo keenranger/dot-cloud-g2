@@ -30,7 +30,14 @@ export class G2Text {
     this.writes.set(containerID, sequence);
     // Until this write is acknowledged, the container's text is unknown.
     this.shown.delete(containerID);
-    const ok = await this.write(containerID, containerName, content);
+    // A rejected header write must not prevent the independent reply container from being attempted.
+    // Leave failures uncached so the next reconciliation can recover without a new server message.
+    let ok = false;
+    try {
+      ok = await this.write(containerID, containerName, content);
+    } catch {
+      // The SDK may reject asynchronously or throw while validating the call.
+    }
     if (ok && this.writes.get(containerID) === sequence) this.shown.set(containerID, stamp);
     return ok;
   }

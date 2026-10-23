@@ -17,6 +17,7 @@ Operational guide for agents working in this repository. Product and security de
 - Publishing needs explicit user authorization for the target and action: GitHub push, Sites save/deploy, and Even Hub upload. That authorization persists within the same ongoing task and its approved targets, actions, and conditions; do not ask again solely because the turn, commit, or version changed. It does not become standing authorization after the task is complete, and material scope changes need renewed authorization.
 - Even Hub public review, store publishing, `evenhub promote`, `evenhub delist`, `evenhub rm`, `evenhub update`, and `evenhub create` each need their own explicit authorization. An upload authorization does not include any of them.
 - Commits are GPG-signed (`git commit -S`).
+- Future changes go on a branch and through a reviewable pull request; do not push directly to `main`. Already released history on `main` stays as is (no rewrite or force-push).
 
 ## Relay deploy (Sites)
 
@@ -77,9 +78,10 @@ evenhub ls app.mark.evendotscloud --json
 
 ### Snapshot (2026-10-23)
 
-- Remote `0.2.0`: status Private, 7558005 bytes, no channels. Local `outputs/dot-cloud-0.2.0.ehpk` SHA-256 `27e957b85808816e30754a85737af8d10ba7ead2f31bcb8912dc5b89929d2b59`.
-- Built from signed source commit `37580095fcff175784234845b58adce7967633f5` on `main`.
-- Remote `0.1.0` is also Private. Neither is in review or public.
+- Remote `0.3.0` (build ID 119595): status Private, 7558524 bytes, no channels. Local `outputs/dot-cloud-0.3.0.ehpk` SHA-256 `79e85e6d03e08eb4b4f2b912f1195e110746740ffd2230f08840d0d622ccbb31`; `evenhub ls` size matches the local artifact.
+- Source: signed commit `4cd639ad390e17d8ea690b31fcb34cb70cb83f21` on `main` (phone-side Soniox streaming during recording).
+- Remote `0.2.0` (119579) and `0.1.0` (119524) are also Private. None is in review or public.
+- The relay is deployed at the public URL above from the existing Sites project; the latest Sites-workflow source commit is `3d586c7c4dc29bd99573464f0fa9169d526ad372` (`4cd639a` changes only `even-app/`, so no relay redeploy is needed for 0.3.0).
 
 Re-read the remote state before acting; this snapshot will go stale.
 

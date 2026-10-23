@@ -93,6 +93,7 @@ export const loadWakeDetector: LoadWakeDetector = (event, error, name = "dot") =
         return;
       }
       if (data.type === "wake") event({ type: "wake" });
+      if (data.type === "audio" && data.pcm instanceof Uint8Array) event({ type: "audio", pcm: data.pcm });
       if (data.type === "clip") event({ type: "clip", wav: data.wav, seconds: data.seconds });
     };
     send("init", { assets: new URL("wake-assets/", document.baseURI).href, name });

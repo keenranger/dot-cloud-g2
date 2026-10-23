@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   MAX_CLIP_BYTES,
   SonioxTranscriptionError,
+  openSonioxStream,
   sttMessage,
   transcribeSonioxClip,
   type SonioxSocket,
@@ -13,6 +14,7 @@ const KEY = "snx_test_key_0123456789";
 
 class FakeSocket implements SonioxSocket {
   readyState = 0;
+  bufferedAmount = 0;
   sent: (string | Uint8Array)[] = [];
   closes = 0;
   onopen: (() => void) | null = null;
@@ -281,10 +283,168 @@ test("never writes to the console", async () => {
 });
 
 test("user notices are fixed per failure kind and carry at most the numeric provider code", () => {
-  const kinds = ["invalid-audio", "credential", "aborted", "timeout", "connection", "provider", "protocol"] as const;
+  const kinds = [
+    "invalid-audio",
+    "credential",
+    "aborted",
+    "timeout",
+    "connection",
+    "provider",
+    "protocol",
+    "overflow",
+  ] as const;
   const notices = kinds.map((kind) => sttMessage(new SonioxTranscriptionError(kind)));
   assert.equal(new Set(notices).size, kinds.length);
   assert.match(sttMessage(new SonioxTranscriptionError("provider", 401)), /키/);
   assert.match(sttMessage(new SonioxTranscriptionError("provider", 503)), /503/);
   for (const notice of notices) assert.ok(!notice.includes(KEY));
+});
+
+const audioFrames = (socket: FakeSocket) => socket.sent.filter((f): f is Uint8Array => f instanceof Uint8Array);
+
+test("live stream holds audio while connecting, then sends each frame as it is written, before end", async () => {
+  const { calls, createSocket } = harness();
+  const stream = openSonioxStream({ credential: () => KEY, createSocket });
+  const early = clip(640);
+  assert.equal(stream.write(early), true);
+  // Callers may reuse or mutate their buffer; the held preroll must keep the original bytes.
+  const expected = Buffer.from(early);
+  early.fill(0);
+  await tick();
+  const socket = calls[0].socket;
+  assert.equal(socket.sent.length, 0, "nothing is sent before the socket opens");
+  socket.open();
+  assert.equal(JSON.parse(socket.sent[0] as string).model, "stt-rt-v5");
+  assert.deepEqual(Buffer.concat(audioFrames(socket)), expected);
+  const live = clip(320);
+  assert.equal(stream.write(live), true);
+  assert.equal(audioFrames(socket).length, 2, "a frame written after open is sent immediately, not at stop");
+  assert.ok(!socket.sent.includes(""), "end-of-audio is not sent until end()");
+  socket.reply({ tokens: [{ text: "안녕", is_final: true, start_ms: 0, end_ms: 100 }] });
+  const ended = stream.end();
+  assert.equal(stream.end(), ended, "end is idempotent");
+  assert.equal(stream.write(clip(2)), false, "audio after end is refused");
+  assert.equal(socket.sent.filter((f) => f === "").length, 1, "end-of-audio is sent exactly once");
+  socket.reply({ tokens: [], finished: true });
+  assert.equal(await ended, "안녕");
+  assert.equal(await stream.result, "안녕");
+});
+
+test("end before the socket opens flushes held audio, then sends end-of-audio once", async () => {
+  const { calls, createSocket } = harness();
+  const stream = openSonioxStream({ credential: () => KEY, createSocket });
+  stream.write(clip(640));
+  const ended = stream.end();
+  stream.end();
+  await tick();
+  const socket = calls[0].socket;
+  socket.open();
+  assert.deepEqual(
+    socket.sent.slice(1).map((f) => (f instanceof Uint8Array ? "audio" : f)),
+    ["audio", ""],
+  );
+  socket.reply({ tokens: [], finished: true });
+  assert.equal(await ended, "");
+});
+
+test("the connecting queue is bounded: overflow fails loudly instead of dropping audio", async () => {
+  const { calls, createSocket } = harness();
+  const stream = openSonioxStream({ credential: () => KEY, createSocket, queueBytes: 1000 });
+  assert.equal(stream.write(clip(640)), true);
+  assert.equal(stream.write(clip(640)), false);
+  await assert.rejects(stream.result, { kind: "overflow" });
+  await tick();
+  assert.equal(calls.length, 0, "a failed stream never opens a billable socket");
+  assert.equal(stream.write(clip(2)), false);
+});
+
+test("a socket that stops draining fails as overflow instead of buffering without limit", async () => {
+  const { calls, createSocket } = harness();
+  const stream = openSonioxStream({ credential: () => KEY, createSocket, maxBufferedBytes: 1000 });
+  await tick();
+  const socket = calls[0].socket;
+  socket.open();
+  assert.equal(stream.write(clip(640)), true);
+  socket.bufferedAmount = 2000;
+  assert.equal(stream.write(clip(640)), false);
+  await assert.rejects(stream.end(), { kind: "overflow" });
+  assert.equal(socket.closes, 1);
+});
+
+test("abort mid-stream closes the socket; later frames and end send nothing", async () => {
+  const { calls, createSocket } = harness();
+  const controller = new AbortController();
+  const stream = openSonioxStream({ credential: () => KEY, createSocket, signal: controller.signal });
+  await tick();
+  const socket = calls[0].socket;
+  socket.open();
+  stream.write(clip(640));
+  const before = socket.sent.length;
+  controller.abort();
+  await assert.rejects(stream.result, { kind: "aborted" });
+  socket.readyState = 1;
+  assert.equal(stream.write(clip(640)), false);
+  await assert.rejects(stream.end(), { kind: "aborted" });
+  assert.equal(socket.sent.length, before);
+  assert.equal(socket.closes, 1);
+  assert.equal(socket.onmessage, null);
+});
+
+test("partial text is reported for display only and never resolves the stream", async () => {
+  const { calls, createSocket } = harness();
+  const partials: string[] = [];
+  const stream = openSonioxStream({ credential: () => KEY, createSocket, onPartial: (t) => void partials.push(t) });
+  let settled = false;
+  void stream.result.then(() => (settled = true));
+  await tick();
+  const socket = calls[0].socket;
+  socket.open();
+  stream.write(clip(640));
+  socket.reply({
+    tokens: [
+      { text: "내일", is_final: true, start_ms: 0, end_ms: 100 },
+      { text: " 회", is_final: false, start_ms: 100, end_ms: 200 },
+    ],
+  });
+  socket.reply({ tokens: [{ text: " 회의", is_final: false, start_ms: 100, end_ms: 300 }] });
+  await tick();
+  assert.deepEqual(partials, ["내일 회", "내일 회의"]);
+  assert.equal(settled, false, "only finished settles the stream");
+  const ended = stream.end();
+  socket.reply({ tokens: [{ text: " 회의", is_final: true, start_ms: 100, end_ms: 300 }] });
+  socket.reply({ tokens: [], finished: true });
+  assert.equal(await ended, "내일 회의");
+});
+
+test("end with no audio fails without waiting, and a missing finished after end times out once", async () => {
+  const empty = harness();
+  const stream = openSonioxStream({ credential: () => KEY, createSocket: empty.createSocket });
+  await tick();
+  empty.calls[0].socket.open();
+  await assert.rejects(stream.end(), { kind: "invalid-audio" });
+  assert.ok(!empty.calls[0].socket.sent.includes(""));
+
+  const slow = harness();
+  const late = openSonioxStream({ credential: () => KEY, createSocket: slow.createSocket, finishTimeoutMs: 20 });
+  await tick();
+  slow.calls[0].socket.open();
+  late.write(clip(640));
+  await assert.rejects(late.end(), { kind: "timeout" });
+  assert.equal(slow.calls.length, 1);
+});
+
+test("finished before end-of-audio is a protocol failure, never a truncated transcript", async () => {
+  const { calls, createSocket } = harness();
+  const stream = openSonioxStream({ credential: () => KEY, createSocket });
+  await tick();
+  const socket = calls[0].socket;
+  socket.open();
+  stream.write(clip(640));
+  socket.reply({ tokens: [{ text: "앞부분", is_final: true, start_ms: 0, end_ms: 100 }] });
+  socket.reply({ tokens: [], finished: true });
+  await assert.rejects(stream.result, { kind: "protocol" });
+  await assert.rejects(stream.end(), { kind: "protocol" });
+  assert.ok(!socket.sent.includes(""));
+  assert.equal(stream.write(clip(2)), false);
+  assert.equal(socket.closes, 1);
 });

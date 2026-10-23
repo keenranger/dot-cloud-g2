@@ -7,11 +7,10 @@ import {
   waitForEvenAppBridge,
   type EvenAppBridge,
 } from "@evenrealities/even_hub_sdk";
-import { pages, relayOrigin, wav } from "./protocol.ts";
+import { pages, relayOrigin } from "./protocol.ts";
 import "./style.css";
 import { completeVoice, draftFor, utteranceBody, type Draft } from "./voice-flow.ts";
-import { wavPcm } from "./audio.ts";
-import { SonioxTranscriptionError, sttMessage, transcribeSonioxClip } from "./soniox-transcriber.ts";
+import { SonioxTranscriptionError, openSonioxStream, sttMessage, type SonioxStream } from "./soniox-transcriber.ts";
 import { SonioxKey } from "./soniox-key.ts";
 import { MessageHistory, type Reply } from "./message-history.ts";
 import { loadWakeDetector, type WakeDetector } from "./wake-detector.ts";
@@ -43,7 +42,6 @@ const history = new MessageHistory();
 let recording = false;
 let recordingWanted = false;
 let micQueue = Promise.resolve();
-let chunks: Uint8Array[] = [];
 let bytes = 0;
 let recordingTimer: ReturnType<typeof setTimeout> | undefined;
 let busy = false;
@@ -54,6 +52,16 @@ let wakeLabel = "마이크 꺼짐";
 // Typed or reviewed text keeps one utterance id until it is accepted, so an identical resend is idempotent on the relay.
 let draft: Draft | undefined;
 const transcriptions = new Set<{ controller: AbortController; wake: boolean }>();
+/** A Soniox session that receives audio while it is captured; its UUID follows the utterance to submission. */
+interface LiveVoice {
+  stream: SonioxStream;
+  entry: { controller: AbortController; wake: boolean };
+  id: string;
+  version: number;
+  keyRevision: number;
+}
+let manualVoice: LiveVoice | undefined;
+let wakeVoice: LiveVoice | undefined;
 const NO_KEY =
   "Soniox 키가 없어 음성 전사를 할 수 없습니다. 설정에 본인 Soniox 키를 입력하거나 직접 입력해 전송하세요.";
 const sonioxKey = new SonioxKey(
@@ -114,6 +122,9 @@ function syncWake(): void {
             ? "Hey dots 사용 불가 · Soniox 키가 없어 마이크를 열지 않습니다."
             : "Hey dots 감지 일시 중지 · 녹음, 처리 또는 작성 중에는 듣지 않습니다.",
     );
+    // A wake capture that has not finished yet is withdrawn with its Soniox session.
+    discardVoice(wakeVoice);
+    wakeVoice = undefined;
     // Turning Hey dots off withdraws a post-cue clip that is still being transcribed.
     if (!el<HTMLInputElement>("wake-enabled").checked) abortTranscriptions((wake) => wake);
     queueMic(async () => {
@@ -145,12 +156,19 @@ function syncWake(): void {
       const detector = await loadWakeDetector(
         (event) => {
           if (epoch !== wakeEpoch || !current(version) || !wakeAllowed()) return;
-          if (event.type === "wake") {
+          if (event.type === "audio") {
+            wakeVoice?.stream.write(event.pcm);
+          } else if (event.type === "wake") {
+            // Soniox connects right after the cue; only post-cue speech confirmed by local VAD is written to it.
+            discardVoice(wakeVoice);
+            wakeVoice = openVoice(version, true);
             wakeNotice("Hey dots 감지됨 · 이제 질문을 말하세요.");
             selectedPages = ["Hey dots 감지됨 · 질문을 말하세요."];
             page = 0;
             renderDisplay();
           } else {
+            const voice = wakeVoice;
+            wakeVoice = undefined;
             busy = true;
             syncWake();
             controls();
@@ -158,13 +176,17 @@ function syncWake(): void {
             const deliveryEpoch = wakeEpoch;
             queueMic(async () => {
               try {
-                if (!current(version)) return;
+                if (!current(version)) {
+                  discardVoice(voice);
+                  return;
+                }
                 await finishWakeClip({
                   clip,
                   canUpload: () =>
                     deliveryEpoch === wakeEpoch && active && el<HTMLInputElement>("wake-enabled").checked,
-                  upload: (clip) => processClip(wavPcm(clip), version, true),
+                  upload: async () => (voice ? finishVoice(voice) : showNotice(NO_KEY)),
                   restore: () => {
+                    discardVoice(voice);
                     if (history.selected) showSelectedReply();
                     else {
                       selectedPages = ["질문을 기다립니다. Hey dots 또는 길게 누르기로 말하세요."];
@@ -357,29 +379,60 @@ function showNotice(text: string): void {
   page = 0;
   renderDisplay();
 }
-/** Audio goes from the phone straight to Soniox with the user's key; only the transcript reaches the relay. */
-async function processClip(pcm: Uint8Array, version: number, wake: boolean): Promise<void> {
-  if (!current(version) || !active) return;
+function showPartial(text: string): void {
+  el("partial").hidden = !text;
+  el("partial").textContent = text ? `실시간 인식 (미확정): ${text}` : "";
+}
+function voiceLive(voice: LiveVoice): boolean {
+  return (
+    current(voice.version) &&
+    active &&
+    !voice.entry.controller.signal.aborted &&
+    sonioxKey.revision === voice.keyRevision &&
+    (!voice.entry.wake || el<HTMLInputElement>("wake-enabled").checked)
+  );
+}
+/** Audio goes from the phone straight to Soniox with the user's key while it is captured; only the transcript reaches the relay. */
+function openVoice(version: number, wake: boolean): LiveVoice | undefined {
   const key = sonioxKey.value;
-  if (!key) return showNotice(NO_KEY);
-  const keyRevision = sonioxKey.revision;
-  const id = crypto.randomUUID();
+  if (!key || !current(version) || !active) return undefined;
   const entry = { controller: new AbortController(), wake };
   transcriptions.add(entry);
-  const live = () =>
-    current(version) &&
-    active &&
-    !entry.controller.signal.aborted &&
-    sonioxKey.revision === keyRevision &&
-    (!wake || el<HTMLInputElement>("wake-enabled").checked);
-  status("음성 전사 중 · Soniox로 직접 전송");
-  selectedPages = ["음성 전사 중 · 아직 전송 전"];
+  const voice: LiveVoice = {
+    entry,
+    id: crypto.randomUUID(),
+    version,
+    keyRevision: sonioxKey.revision,
+    stream: openSonioxStream({
+      credential: () => key,
+      signal: entry.controller.signal,
+      // Phone-only running text; G2, history and submission wait for the final transcript.
+      onPartial: (text) => {
+        if (voiceLive(voice)) showPartial(text);
+      },
+    }),
+  };
+  // An abandoned stream must not become an unhandled rejection; failures surface through end().
+  voice.stream.result.catch(() => undefined);
+  return voice;
+}
+function discardVoice(voice: LiveVoice | undefined): void {
+  if (!voice) return;
+  voice.entry.controller.abort();
+  transcriptions.delete(voice.entry);
+  showPartial("");
+}
+async function finishVoice(voice: LiveVoice): Promise<void> {
+  const { version, id } = voice;
+  if (!current(version) || !active) return discardVoice(voice);
+  status("음성 전사 마무리 중 · Soniox 최종 결과 대기");
+  selectedPages = ["음성 전사 마무리 중 · 아직 전송 전"];
   page = 0;
   renderDisplay();
   try {
     await completeVoice({
-      transcribe: () => transcribeSonioxClip(pcm, { credential: () => key, signal: entry.controller.signal }),
-      current: live,
+      transcribe: () => voice.stream.end(),
+      current: () => voiceLive(voice),
       automatic: () => el<HTMLInputElement>("auto-send").checked,
       review: (text) => {
         el<HTMLTextAreaElement>("text").value = text;
@@ -393,7 +446,8 @@ async function processClip(pcm: Uint8Array, version: number, wake: boolean): Pro
     // Cancellation by a key change or Hey dots off still replaces the "transcribing" notice on G2.
     if (current(version) && active) showNotice(sttMessage(e));
   } finally {
-    transcriptions.delete(entry);
+    transcriptions.delete(voice.entry);
+    showPartial("");
   }
 }
 function startRecording(): void {
@@ -401,24 +455,36 @@ function startRecording(): void {
   if (!sonioxKey.value) return showNotice(NO_KEY);
   recordingWanted = true;
   syncWake();
-  chunks = [];
   bytes = 0;
   controls();
   const version = generation;
+  // Soniox connects while the microphone starts, so speech is recognized while it is spoken.
+  const voice = openVoice(version, false);
+  manualVoice = voice;
+  // A failed or overloaded session ends the recording now instead of after the user releases.
+  voice?.stream.result.catch(() => {
+    if (manualVoice === voice) stopRecording(false);
+  });
+  const withdraw = () => {
+    if (manualVoice === voice) manualVoice = undefined;
+    discardVoice(voice);
+  };
   queueMic(async () => {
-    if (!current(version) || !recordingWanted || !active) return;
+    if (!current(version) || !recordingWanted || !active) return withdraw();
     if (wakeMicOpen) {
       recordingWanted = false;
+      withdraw();
       throw new Error("이전 마이크 중지를 확인한 뒤 다시 시도하세요.");
     }
     if (!(await bridge!.audioControl(true, AudioInputSource.Glasses))) {
       recordingWanted = false;
+      withdraw();
       throw new Error("G2 마이크를 시작하지 못했습니다.");
     }
     recording = true;
     wakeNotice("마이크 켜짐 · 수동 녹음 중");
     if (!current(version) || !recordingWanted || !active) return;
-    status("녹음 중 · 중지하면 전사합니다.");
+    status("녹음 중 · Soniox 실시간 전사 중 · 중지하면 최종 결과를 전송합니다.");
     selectedPages = ["녹음 중 · 손을 떼면 전사 후 전송합니다."];
     page = 0;
     renderDisplay();
@@ -431,23 +497,24 @@ function stopRecording(discard: boolean): void {
   clearTimeout(recordingTimer);
   controls();
   const version = generation;
+  const voice = manualVoice;
+  manualVoice = undefined;
   queueMic(async () => {
-    if (!recording) return;
+    if (!recording) return discardVoice(voice);
     const ok = await bridge!.audioControl(false, AudioInputSource.Glasses);
     if (!ok) {
+      discardVoice(voice);
       status("마이크 중지를 확인하지 못했습니다. Even 앱에서 종료하세요.");
       return;
     }
     recording = false;
     wakeNotice("마이크 꺼짐 · 음성 처리 중");
-    const captured = chunks;
-    chunks = [];
     bytes = 0;
-    if (discard || !current(version) || !active) return;
+    if (!voice || discard || !current(version) || !active) return discardVoice(voice);
     busy = true;
     controls();
     try {
-      await processClip(wavPcm(wav(captured)), version, false);
+      await finishVoice(voice);
     } catch (e) {
       if (current(version)) report(e);
     } finally {
@@ -677,7 +744,8 @@ void (async () => {
         return;
       }
       const count = Math.min(frame.length, 960000 - bytes);
-      chunks.push(frame.slice(0, count));
+      // Frames go to Soniox as they arrive; the stream copies anything it has to hold while connecting.
+      manualVoice?.stream.write(frame.subarray(0, count));
       bytes += count;
       if (bytes >= 960000) stopRecording(false);
     }

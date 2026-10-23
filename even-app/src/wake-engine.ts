@@ -18,7 +18,11 @@ export interface SpeechDetector {
   reset(): void;
   free(): void;
 }
-export type WakeEvent = { type: "wake" } | { type: "clip"; wav?: Uint8Array; seconds: number };
+export type WakeEvent =
+  | { type: "wake" }
+  /** Post-cue PCM in capture order, released only once local VAD has heard speech (or the user holds). */
+  | { type: "audio"; pcm: Uint8Array }
+  | { type: "clip"; wav?: Uint8Array; seconds: number };
 
 /** A bounded, phone-local audio path. Only a post-wake utterance can leave it. */
 export class WakeEngine {
@@ -34,6 +38,8 @@ export class WakeEngine {
   private held = false;
   private vadFrame = new Float32Array(512);
   private vadUsed = 0;
+  // Post-cue audio waiting for the speech decision; bounded by the clip limit.
+  private unsent: Uint8Array[] = [];
 
   constructor(kws: KeywordSpotter, vad: SpeechDetector, event: (event: WakeEvent) => void) {
     this.kws = kws;
@@ -57,6 +63,7 @@ export class WakeEngine {
     this.vad.reset();
     this.vadFrame.fill(0);
     this.vadUsed = 0;
+    this.unsent = [];
   }
   /** A long press takes over an active utterance without throwing it away. */
   hold(): void {
@@ -65,6 +72,7 @@ export class WakeEngine {
   finish(discard = false): void {
     if (this.mode !== "capture") return;
     const deliver = !discard && (this.speechSeen || this.held) && this.clip.byteLength > 0;
+    if (deliver) this.release();
     const event: WakeEvent = {
       type: "clip",
       seconds: this.clip.duration,
@@ -132,9 +140,17 @@ export class WakeEngine {
   private get active(): boolean {
     return this.mode !== "idle";
   }
+  /** Streams exactly the bytes the clip holds, so streamed audio and the clip never diverge. */
+  private release(): void {
+    const unsent = this.unsent;
+    this.unsent = [];
+    for (const pcm of unsent) this.event({ type: "audio", pcm });
+  }
   private capture(pcm: Uint8Array, samples: Float32Array): void {
     if (this.mode !== "capture") return;
-    const remaining = this.clip.append(pcm);
+    const kept = pcm.slice(0, Math.max(0, Math.min(pcm.byteLength, this.clip.maxBytes - this.clip.byteLength)));
+    const remaining = this.clip.append(kept);
+    if (kept.byteLength) this.unsent.push(kept);
     for (const sample of samples) {
       this.vadFrame[this.vadUsed++] = sample;
       if (this.vadUsed !== this.vadFrame.length) continue;
@@ -146,6 +162,7 @@ export class WakeEngine {
         return;
       }
     }
+    if (this.speechSeen || this.held) this.release();
     if (!remaining || this.clip.duration >= MAX_RECORDING_SECONDS) this.finish();
     else if (!this.held && !this.speechSeen && this.clip.duration >= 6) this.finish(true);
   }

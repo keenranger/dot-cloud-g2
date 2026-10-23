@@ -85,7 +85,8 @@ async function initialize(assets: string, name = "dot"): Promise<void> {
   module.FS.unlink("/keywords.txt");
   engine = new WakeEngine(kws, vad, (event) => {
     const message = { ...event, generation };
-    host.postMessage(message, event.type === "clip" && event.wav ? [event.wav.buffer as ArrayBuffer] : []);
+    const buffer = event.type === "clip" ? event.wav?.buffer : event.type === "audio" ? event.pcm.buffer : undefined;
+    host.postMessage(message, buffer ? [buffer as ArrayBuffer] : []);
   });
   host.postMessage({ type: "ready" });
 }

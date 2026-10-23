@@ -23,6 +23,7 @@ const status = (text: string) => {
 const storageKey = "dot-cloud-device-v1";
 let bridge: EvenAppBridge | undefined;
 let ready = false;
+let pageLoaded = true;
 let active = !document.hidden;
 let exited = false;
 let generation = 0;
@@ -891,7 +892,7 @@ function pause(): void {
   controls();
 }
 function resume(): void {
-  if (exited) return;
+  if (exited || !pageLoaded) return;
   active = true;
   // G2 may have dropped the page while hidden, so resend the current text once.
   g2.forget();
@@ -906,8 +907,14 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && !active) resume();
   else if (!ready) pause();
 });
-window.addEventListener("pagehide", pause);
-window.addEventListener("pageshow", resume);
+window.addEventListener("pagehide", () => {
+  pageLoaded = false;
+  pause();
+});
+window.addEventListener("pageshow", () => {
+  pageLoaded = true;
+  resume();
+});
 // Outside the Even app the bridge never appears; say so instead of waiting silently.
 const bridgeWait = setTimeout(() => {
   if (!bridge) status("Even 앱을 찾지 못했습니다. Even 앱의 Dot Cloud에서 열어 주세요.");
@@ -946,7 +953,7 @@ void (async () => {
   );
   if (result !== 0) throw new Error("G2 시작 화면을 만들지 못했습니다. Even 앱에서 다시 여세요.");
   ready = true;
-  active = true;
+  active = pageLoaded;
   controls();
   bridge.onEvenHubEvent((event) => {
     if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && wakeMicOpen && wakeAllowed())

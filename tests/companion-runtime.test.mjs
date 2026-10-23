@@ -14,6 +14,7 @@ test("same-message display recovery, locked-phone polling, unload and confirmed 
   const timers = new Map();
   let timerId = 0;
   let polls = 0;
+  let settleStartup;
   let onHostEvent;
   let failBody = true;
   let failHeader = true;
@@ -40,7 +41,9 @@ test("same-message display recovery, locked-phone polling, unload and confirmed 
   const host = {
     _ready: true,
     async createStartUpPageContainer() {
-      return 0;
+      return new Promise((resolve) => {
+        settleStartup = () => resolve(0);
+      });
     },
     onEvenHubEvent(callback) {
       onHostEvent = callback;
@@ -113,6 +116,17 @@ test("same-message display recovery, locked-phone polling, unload and confirmed 
       compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
     }).outputText;
     await import("data:text/javascript;base64," + Buffer.from(emitted).toString("base64"));
+    await flush();
+    assert.ok(settleStartup);
+    listeners.get("pagehide")();
+    settleStartup();
+    await flush();
+    assert.equal(polls, 0, "late startup cannot reactivate an unloaded page");
+    assert.equal(
+      [...timers.values()].some((t) => t.ms === 2500),
+      false,
+    );
+    listeners.get("pageshow")();
     await flush();
     assert.equal(get("reply").textContent, "안경 답변 확인");
     assert.match(get("display").textContent, /실패/);

@@ -8,13 +8,13 @@ Failed G2 writes were left uncached, but polling unchanged history did not attem
 
 Ready glasses sessions no longer stop merely because the phone document becomes hidden. Page unload and confirmed host exit still cancel requests/capture. Root double-tap requests `shutDownPageContainer(1)`; a cancelled confirmation does not terminate the session. This follows the published Even Hub lifecycle contract, but does not override OS suspension. Session-only Soniox keys still disappear on cold restart unless the user explicitly opted into SDK storage.
 
-Validation: 80 companion tests and 29 relay/runtime tests pass; the latter includes the actual companion entry point with fake host/DOM/HTTP boundaries. It covers an unchanged reply recovering from failed display acknowledgement, successful bodies not being resent, hidden-phone polling, root confirmation mode 1, continuation after cancelled confirmation, pagehide cancellation and confirmed-host-exit fencing. Companion build, lint, test typecheck and pinned wake-asset verification pass. `git diff --check` passes.
+Validation: 80 companion tests and 29 relay/runtime tests pass; the latter includes the actual companion entry point with fake host/DOM/HTTP boundaries. It covers an unchanged reply recovering from failed display acknowledgement, successful bodies not being resent, hidden-phone polling, root confirmation mode 1, continuation after cancelled confirmation, pagehide cancellation and confirmed-host-exit fencing, and pagehide during deferred startup. Independent read-only history review found the late-startup reactivation race; a separate pageLoaded fence now prevents it. Companion build, lint, test typecheck and pinned wake-asset verification pass. `git diff --check` passes.
 
 First pnpm script execution attempted to rewrite shared dependency shims and was sandbox-blocked; subsequent verification uses existing binaries directly, without reinstalling dependencies in concurrent worktrees. Simulator installed separately from the official npm registry: 0.9.5.
 
 ## Artifact and remote status
 
-Candidate `dot-cloud-0.4.1-candidate.ehpk`: 7,563,201 bytes, SDK 0.0.16, min Even app 2.2.10, official online packaging completed without warnings. Candidate is local only. Existing name `Dot Cloud` is retained pending user naming decision; it must be aligned across manifest/UI/portal before submission.
+Candidate `dot-cloud-0.4.1-candidate.ehpk`: 7,563,213 bytes, SDK 0.0.16, min Even app 2.2.10, official online packaging completed without warnings. Candidate is local only. Existing name `Dot Cloud` is retained pending user naming decision; it must be aligned across manifest/UI/portal before submission.
 
 Authenticated remote app `app.mark.evendotscloud`: latest 0.4.0 (119653), Private, 7,563,082 bytes, no beta/public channels. Authenticated portal viewed in user's Mark Mac Chrome: `even_dots`, no screenshots, description, privacy/terms or developer information; Submit disabled. The existing name contains “Even” and violates current independent-app naming policy. Do not rename without the user's selected name.
 

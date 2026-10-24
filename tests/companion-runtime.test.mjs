@@ -850,14 +850,11 @@ test("late running text after a pause, a new cue, Hey dots off or a host exit ne
     off.get("wake-enabled").onchange();
     await off.flush();
     assert.equal(socket.closed, true);
-    assert.equal(
-      bodies(off).at(-1),
-      "Hey dots 감지됨 · 질문을 말하세요.",
-      "a cancelled capture drops its unconfirmed text",
-    );
+    assert.match(bodies(off).at(-1), /^음성 입력을 멈췄습니다/, "a cancelled capture drops its unconfirmed text");
+    const stopped = bodies(off).length;
     late(handler, "취소된 뒤");
     await off.flush();
-    assert.equal(bodies(off).at(-1), "Hey dots 감지됨 · 질문을 말하세요.");
+    assert.equal(bodies(off).length, stopped);
     assert.equal(off.posts.length, 0);
   } finally {
     off.restore();
@@ -897,6 +894,187 @@ test("long Korean running text is shown whole up to the update limit, then keeps
     assert.equal(body.isWellFormed(), true);
     const update = h.writes.findLast((w) => w.containerID === 1);
     assert.equal(update.contentLength, update.content.length);
+  } finally {
+    h.restore();
+  }
+});
+
+/** A Hey dots capture with running text on G2; returns the detector and its Soniox socket. */
+async function wakeCapture(h, text = "오늘 날씨") {
+  await h.frame();
+  const detector = h.detectors.at(-1);
+  detector.event({ type: "wake" });
+  await h.flush();
+  detector.event({ type: "audio", pcm: new Uint8Array(640) });
+  await h.flush();
+  const socket = h.sockets.at(-1);
+  partial(socket, [text]);
+  await h.flush();
+  assert.equal(bodies(h).at(-1), `${LIVE}\n${text}`);
+  return { detector, socket };
+}
+const headers = (h) => h.writes.filter((w) => w.containerID === 2).map((w) => w.content);
+const turnOffWake = async (h) => {
+  h.get("wake-enabled").checked = false;
+  h.get("wake-enabled").onchange();
+  await h.flush();
+};
+
+test("a single reply deferred behind Hey dots running text comes back when Hey dots is turned off", async () => {
+  const messages = [];
+  const h = await boot({ storage: ready, messages });
+  try {
+    const { socket } = await wakeCapture(h);
+    messages.push({ message_id: "only", text: "하나뿐인 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨`, "the reply waits behind the running text");
+    assert.equal(h.get("prev-message").disabled, true);
+    assert.equal(h.get("next-message").disabled, true, "with one reply neither message button can reach it");
+    // A G2 boundary gesture has no adjacent message to move to either.
+    h.onHostEvent({ textEvent: { eventType: EVENT.SCROLL_TOP } });
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨`);
+    const handler = socket.onmessage;
+    await turnOffWake(h);
+    assert.equal(socket.closed, true);
+    assert.equal(bodies(h).at(-1), "하나뿐인 답변", "the deferred reply takes the body instead of the instruction");
+    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.match(h.get("status").textContent, /최신 답변/);
+    const after = bodies(h).length;
+    handler({ data: JSON.stringify({ tokens: [{ text: "늦은 말", is_final: false }] }) });
+    await h.fire(2500);
+    assert.equal(bodies(h).length, after, "late running text and later polls leave the reply alone");
+    assert.equal(h.posts.length, 0);
+  } finally {
+    h.restore();
+  }
+});
+
+test("cancelling a capture with no new reply says it stopped; a cue with nothing heard yet does too", async () => {
+  const h = await boot({
+    storage: ready,
+    messages: [{ message_id: "old", text: "예전 답변", createdAt: "2026-10-24T00:00:00Z" }],
+  });
+  try {
+    await h.flush();
+    await wakeCapture(h);
+    await turnOffWake(h);
+    assert.match(bodies(h).at(-1), /^음성 입력을 멈췄습니다/, "neither the stale instruction nor the running text");
+    assert.ok(!bodies(h).at(-1).includes("미확정"));
+  } finally {
+    h.restore();
+  }
+  const quiet = await boot({ storage: ready });
+  try {
+    await quiet.frame();
+    quiet.detectors.at(-1).event({ type: "wake" });
+    await quiet.flush();
+    assert.equal(bodies(quiet).at(-1), "Hey dots 감지됨 · 질문을 말하세요.");
+    await turnOffWake(quiet);
+    assert.match(bodies(quiet).at(-1), /^음성 입력을 멈췄습니다/, "the cue instruction does not outlive Hey dots");
+  } finally {
+    quiet.restore();
+  }
+});
+
+test("a deferred reply does not take back a message the user moved to, and survives a late acknowledgement", async () => {
+  const messages = [{ message_id: "a", text: "첫 답변", createdAt: "2026-10-24T00:00:00Z" }];
+  const moved = await boot({ storage: ready, messages });
+  try {
+    await moved.flush();
+    await wakeCapture(moved);
+    messages.push({ message_id: "b", text: "새 답변", createdAt: "2026-10-24T00:00:01Z" });
+    await moved.fire(2500);
+    moved.get("prev-message").onclick();
+    await moved.flush();
+    assert.equal(bodies(moved).at(-1), "첫 답변", "the user chose an earlier message");
+    const after = bodies(moved).length;
+    await turnOffWake(moved);
+    assert.equal(bodies(moved).length, after, "cancelling leaves the chosen message in place");
+  } finally {
+    moved.restore();
+  }
+  const held = [];
+  let hold = false;
+  const replies = [];
+  const late = await boot({
+    storage: ready,
+    messages: replies,
+    write: (update) => (hold && update.containerID === 1 ? new Promise((resolve) => held.push(resolve)) : true),
+  });
+  try {
+    const { socket } = await wakeCapture(late);
+    hold = true;
+    partial(socket, ["오늘 날씨 어때"]);
+    await late.flush();
+    assert.equal(held.length, 1, "a running-text write is unacknowledged");
+    replies.push({ message_id: "r", text: "늦게 온 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await late.fire(2500);
+    await turnOffWake(late);
+    hold = false;
+    held.shift()(true);
+    await late.flush();
+    assert.equal(bodies(late).at(-1), "늦게 온 답변", "the reply follows the late acknowledgement");
+    assert.equal(bodies(late).filter((body) => body === "늦게 온 답변").length, 1);
+  } finally {
+    late.restore();
+  }
+  const finishing = [];
+  const off = await boot({ storage: ready, messages: finishing });
+  try {
+    const { detector } = await wakeCapture(off);
+    finishing.push({ message_id: "f", text: "마무리 중 온 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await off.fire(2500);
+    detector.event({ type: "clip", wav: new Uint8Array(684), seconds: 1 });
+    await off.flush();
+    assert.equal(bodies(off).at(-1), `${FINISHING}\n오늘 날씨`);
+    await turnOffWake(off);
+    assert.equal(bodies(off).at(-1), "마무리 중 온 답변", "turning Hey dots off while finishing also restores it");
+    assert.match(off.get("status").textContent, /취소/, "the phone still says the transcription was cancelled");
+    assert.equal(off.posts.length, 0);
+  } finally {
+    off.restore();
+  }
+});
+
+test("reply polls during a slow running-text acknowledgement keep the display status quiet; failures still show", async () => {
+  const held = [];
+  let hold = false;
+  let fail = false;
+  const h = await boot({
+    storage: ready,
+    write: (update) => (update.containerID !== 1 ? true : hold ? new Promise((resolve) => held.push(resolve)) : !fail),
+  });
+  try {
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    partial(socket, ["내일"]);
+    await h.flush();
+    const said = announcements(h);
+    hold = true;
+    partial(socket, ["내일 일정"]);
+    await h.flush();
+    assert.equal(held.length, 1);
+    const polls = h.polls;
+    for (let i = 0; i < 4; i++) await h.fire(2500);
+    assert.equal(h.polls, polls + 4, "polling continues during the hold");
+    assert.deepEqual(said, [], "no status chatter while the acknowledgement is pending");
+    hold = false;
+    while (held.length) {
+      held.shift()(true);
+      await h.flush();
+    }
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`);
+    assert.deepEqual(said, [], "the acknowledged running text keeps the status it already had");
+    assert.equal(h.get("display").textContent, "G2에 실시간 인식(미확정) 표시 중");
+    fail = true;
+    partial(socket, ["내일 일정 알려줘"]);
+    await h.flush();
+    assert.match(said.at(-1), /표시 갱신 실패/, "a failed running-text write is still reported");
+    await h.fire(2500);
+    assert.ok(!said.includes("G2 표시 요청 중"), "the poll retry stays quiet too");
+    assert.match(said.at(-1), /표시 갱신 실패/);
   } finally {
     h.restore();
   }

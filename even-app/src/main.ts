@@ -433,8 +433,8 @@ function cancelRequests(): void {
   requests = new Set();
   abortTranscriptions(() => true);
 }
-/** `quiet` marks a running-text update: the phone display status does not re-announce every partial. */
-function renderDisplay(quiet = false): void {
+/** `quiet` marks running text on G2: the phone display status announces neither each partial nor a poll's retry. */
+function renderDisplay(quiet = captionShown()): void {
   const version = ++displayVersion;
   const connectionVersion = generation;
   // Until the first reply or notice, the body names the next setup step.
@@ -520,6 +520,9 @@ function captureText(text: string, voice?: LiveVoice, label = CAPTION_LIVE): voi
 function captionHolds(): boolean {
   return !!caption && selection === captureNotice;
 }
+function captionShown(): boolean {
+  return captionHolds() && !!caption!.text;
+}
 /** Shows a partial on G2 only while its own capture notice is selected; writes are paced by G2 acknowledgements. */
 function showCaption(voice: LiveVoice, text: string): void {
   if (caption?.voice !== voice || !captionHolds()) return;
@@ -528,16 +531,21 @@ function showCaption(voice: LiveVoice, text: string): void {
   part = 0;
   renderDisplay(true);
 }
-/** A cancelled or finished voice leaves no unconfirmed text on G2: its notice falls back to the plain instruction. */
-function releaseCaption(voice: LiveVoice | undefined): void {
-  if (!voice || caption?.voice !== voice) return;
-  const { heading, text } = caption;
+const CAPTURE_STOPPED = "음성 입력을 멈췄습니다 · 전송하지 않았습니다.";
+/**
+ * A voice that ends without submission while its notice still holds the body: a reply received during the capture
+ * comes back in its place, otherwise `notice` says the capture stopped. Unconfirmed text never stays on G2.
+ * Returns whether the body was replaced.
+ */
+function releaseCaption(voice: LiveVoice | undefined, notice = CAPTURE_STOPPED): boolean {
+  if (!voice || caption?.voice !== voice) return false;
   const held = captionHolds();
   caption = undefined;
-  if (!held || !text) return;
-  parts = segments(heading);
-  part = 0;
-  renderDisplay();
+  // A paused page keeps the capture notice selected, so resume brings the reader back.
+  if (!held || !active) return false;
+  if (history.revision !== voice.revision && history.selected) restoreReader();
+  else displayText(notice);
+  return true;
 }
 /** A reply arrived behind the reader while G2 waited for it: the message being read comes back in place of the notice. */
 function restoreReader(): void {
@@ -722,8 +730,13 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
         `${e instanceof Error ? e.message : "전송하지 못했습니다."} 전사 결과를 입력란에 남겼습니다. 확인한 뒤 다시 전송하세요.`,
       );
     if (!(e instanceof SonioxTranscriptionError)) throw e;
-    // Cancellation by a key change or Hey dots off still replaces the "transcribing" notice on G2.
-    if (current(version) && active) showNotice(sttMessage(e));
+    // Cancellation by a key change or Hey dots off still replaces the "transcribing" notice on G2, unless a reply
+    // received during the capture comes back in its place; the phone status keeps the reason either way.
+    if (current(version) && active) {
+      const message = sttMessage(e);
+      if (releaseCaption(voice, message)) status(message);
+      else showNotice(message);
+    }
   } finally {
     transcriptions.delete(voice.entry);
     showPartial("");

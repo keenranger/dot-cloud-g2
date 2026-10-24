@@ -48,6 +48,9 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   const [deleting, setDeleting] = useState(false);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
   const deletePrompt = useRef<HTMLParagraphElement>(null);
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  // Set after a successful erase so focus moves only once the follow-up refresh has rendered.
+  const focusAfterDelete = useRef(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [busy, setBusy] = useState(false);
@@ -75,6 +78,12 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     // Hydrate the dashboard from the authenticated server after mounting.
     void refresh();
   }, [refresh]);
+  useEffect(() => {
+    if (deleting || !focusAfterDelete.current) return;
+    focusAfterDelete.current = false;
+    // A failed refresh hides the deletion group, so fall back to the always-present refresh control.
+    (deleteTrigger.current ?? refreshButton.current)?.focus();
+  }, [deleting]);
 
   async function createPairing() {
     setBusy(true);
@@ -142,7 +151,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         `서버의 대화 기록 ${result.utterances + result.messages}건을 삭제했습니다. 기기 연결과 Dot 구독은 그대로입니다.`,
       );
       setConfirmingDelete(false);
-      requestAnimationFrame(() => deleteTrigger.current?.focus());
+      focusAfterDelete.current = true;
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "대화 기록을 삭제하지 못했습니다.");
@@ -171,6 +180,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
           <p className="account">{displayName}</p>
         </div>
         <button
+          ref={refreshButton}
           className="button secondary small"
           type="button"
           onClick={() => {

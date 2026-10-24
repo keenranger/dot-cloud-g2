@@ -1,6 +1,6 @@
 # Lens MCP for G2 — privacy notice and terms approval draft
 
-**LOCAL DRAFT — NOT PUBLISHED, NOT LEGALLY REVIEWED, NOT APPROVED FOR PUBLIC USE.** Prepared 2026-10-23, updated 2026-10-24 for the local 0.5.0 candidate (source base `a266438` plus uncommitted backend and companion changes whose final review is pending). Current production is Even Hub 0.4.2 (Private build) with a relay that does not yet include the retention and deletion behavior described here. The owner approved the 30-day retention and owner-erase requirement and the iPhone + G2 target. Operator public display name, public support email, policy URL, effective date and legal approval are unresolved; the bracketed placeholders below must stay visibly unfilled until approved.
+**LOCAL DRAFT — NOT PUBLISHED, NOT LEGALLY REVIEWED, NOT APPROVED FOR PUBLIC USE.** Prepared 2026-10-23, updated 2026-10-24 for the local 0.5.0 candidate (source base `a266438` plus uncommitted backend and companion changes whose final review is pending). Current production is Even Hub 0.4.2 (Private build) with a relay that does not yet include the retention and deletion behavior described here. The owner approved the 30-day retention and owner-erase requirement and the iPhone + G2 target. Public developer/operator display name and support/privacy email are approved as recorded below. Policy URL, effective date, phone/address and legal approval remain unresolved; their placeholders must stay visibly unfilled until approved.
 
 > **Version note.** Sections marked *0.5.0 candidate* describe behavior that is implemented locally but not deployed or uploaded. Until 0.5.0 is deployed and verified, the production relay keeps conversations with no retention period and no user-facing deletion. Do not publish this notice for production 0.4.2 without that caveat.
 
@@ -8,7 +8,7 @@
 
 ### Operator and service
 
-Operator: **[DRAFT PLACEHOLDER — public display name pending owner approval]**. Support/privacy contact: **[DRAFT PLACEHOLDER — public support email pending owner approval]**. Portal telephone and address: not to be filled until it is confirmed whether the portal shows them publicly.
+Operator public display name: **keenranger**. Support/privacy contact: **kghnkl0103@gmail.com**. Approved for public use on 2026-10-24; this does not identify a legal personal name or validate mailbox operation. Portal telephone and address: not to be filled until it is confirmed whether the portal shows them publicly.
 
 Lens MCP for G2 is an independent companion connecting the user's ChatGPT Dot through MCP to G2 glasses. It is not an official Even Realities product and is not a general-purpose MCP client. The phone hosts the companion. Setup uses a one-time relay pairing code; voice transcription additionally uses the user's Soniox account/key.
 
@@ -45,7 +45,7 @@ Provider locations, infrastructure/access logs, backups and provider-side retent
 
 Pairing codes are usable for 10 minutes and consumed atomically on successful use. Subscriptions have a validity TTL (default one hour, bounded between one minute and one day) and can be explicitly unsubscribed, which deletes the subscription record. Expiration makes records unusable for that operation; no scheduled job purges expired pairing, subscription or rate-limit rows. Rate limits use one-minute validity windows, which likewise do not establish a database deletion schedule.
 
-A contact route for privacy requests must be approved and made operational before this notice is published; no response deadline is promised by this draft.
+The approved privacy contact is kghnkl0103@gmail.com; its operation must still be verified before this notice is published; no response deadline is promised by this draft.
 
 ### User controls and session behavior
 
@@ -65,7 +65,7 @@ The app uses HTTPS/WSS endpoints, device-scoped bearer authentication, owner-sco
 4. **Privacy:** the approved privacy notice must accompany these terms. In production 0.4.2, relay conversations have no automatic deletion period or self-service deletion. The 0.5.0 candidate adds a 30-day cutoff and an owner erase control as described in the notice; physical cleanup timing is not guaranteed to the day, and provider copies are outside the relay's control. Device revocation is not conversation deletion.
 5. **Access and exit:** users can stop microphone use, remove keys, disconnect and revoke the device connection using the controls described above. Other provider accounts and stored provider data remain subject to those providers' controls.
 6. **Independence:** this companion is not affiliated with or endorsed by Even Realities, OpenAI/ChatGPT or Soniox merely because it interoperates with their products. Provider names identify compatibility/services, not a sponsorship claim.
-7. **Support and legal administration:** [approved operator/contact], [effective date], [applicable legal/jurisdiction wording if needed], [approved change-notice/support process]. These are unresolved; no waiver, liability allocation, cancellation contract or governing law is adopted by this draft.
+7. **Support and legal administration:** public developer keenranger; support/privacy contact kghnkl0103@gmail.com (approved 2026-10-24), [effective date], [applicable legal/jurisdiction wording if needed], [approved change-notice/support process]. The effective date, legal wording and support process remain unresolved; no waiver, liability allocation, cancellation contract or governing law is adopted by this draft.
 
 ## Owner decisions
 
@@ -78,7 +78,7 @@ Settled (do not re-ask):
 
 Still open:
 
-- Public operator display name and public support email. Do not insert or publish personal details before approval.
+- Public identity/contact settled on 2026-10-24: keenranger / kghnkl0103@gmail.com. Publication and operational mailbox validation remain separate.
 - Whether the portal's telephone and address fields are shown publicly; leave them empty until confirmed.
 - Final policy/terms text, legal review, public hosting destination, effective date and any legal provisions before publishing. Do not fill portal fields with unapproved promises or placeholder URLs.
 
@@ -88,4 +88,4 @@ Physical sweeps delete expired conversation content and atomically leave owner-s
 
 Each maintenance invocation targets at most 20,000 rows and uses at most 41 SQL statements including rate limiting. Fence insertion and later deletion add metadata storage and index writes; hosted D1 plan, quota, actual rows written and batch-result behavior remain unverified activation gates. Measure the first hosted sweep before activating the intended daily 03:00 Asia/Seoul cleanup. The schedule remains unactivated.
 
-Operator identity, support details, effective dates and hosting placeholders remain DRAFT and require approval. No policy approval, hosting, schedule activation or public readiness is established.
+Public identity/contact are approved: keenranger / kghnkl0103@gmail.com (2026-10-24). Effective date, hosting, phone/address, legal provisions and policy text remain DRAFT and require approval. No policy approval, hosting, schedule activation or public readiness is established.

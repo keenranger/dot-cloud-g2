@@ -45,7 +45,7 @@ Status values are DONE, OPEN, OWNER (needs an owner decision) and PENDING (separ
 | Icon | 24×24 monochrome #F4F4F4, 2×2 blocks, legible | Portal: icon checklist item is checked. Source: `assets/store/icon-24.png` | DONE |
 | Description and Category | Category and About are both required | Portal: About is populated (474/2000). **Category is unset.** | OWNER (choose a category) |
 | Screenshots and cover | 576×288 PNG matching on-device render; monochrome background | Portal: none uploaded. Mock: `assets/store/screenshot-first-run.png` (simulator capture) is ready. | OPEN (upload) |
-| Developer and contact information | Required before Confirm | Portal: developer name, telephone and address are empty; contact email is populated and shown publicly per the portal notice. Whether telephone/address are public is unconfirmed | OWNER (public display name, support email, phone/address scope) |
+| Developer and contact information | Required before Confirm | Portal: developer name, telephone and address are empty; contact email is populated and shown publicly per the portal notice. Whether telephone/address are public is unconfirmed | Identity/contact approved 2026-10-24: keenranger / kghnkl0103@gmail.com; portal edits not made; phone/address scope OPEN |
 | Privacy and terms | Policy covers every permission; backend domains traceable to the developer | Portal: missing. Draft: `docs/privacy-terms-approval-draft.md` is unapproved. | OWNER |
 | Release notes | 1–3 lines for each supported language (`en`, `ko`) | Draft: `docs/release-0.5.0.md`, `docs/release-copy-draft.md` | OPEN (owner review after physical QA) |
 | Review build selection and submission | Done in the portal; each step needs separate authorization | Portal: no build selected; Submit disabled | OWNER |
@@ -87,7 +87,7 @@ No physical target phone was available in the 2026-10-24 environment audit, so e
 
 ## Reviewer packet draft
 
-A verified local 0.5.0 package exists from `1341bea`; paste these reviewer notes only after owner approval. It contains no operator, contact or legal details; those are unresolved.
+A verified local 0.5.0 package exists from `1341bea`; paste these reviewer notes only after owner approval. Public developer identity/contact are approved (2026-10-24): keenranger / kghnkl0103@gmail.com. These reviewer notes do not settle legal details, mailbox operation, effective dates or hosting.
 
 > **What it is.** Lens MCP for G2 is an independent companion that connects the user's own ChatGPT Dot to G2 through MCP. It is not an official Even Realities app and not a general-purpose MCP client.
 >
@@ -107,7 +107,7 @@ A verified local 0.5.0 package exists from `1341bea`; paste these reviewer notes
 
 ## Open owner decisions
 
-1. Operator public display name and public support email.
+1. Public developer identity/contact approved 2026-10-24: keenranger / kghnkl0103@gmail.com. Mailbox operation is not verified; approval does not authorize portal edits or publication.
 2. Whether the portal's telephone and address fields are public; leave them empty until confirmed.
 3. Privacy policy and terms hosting location, effective date, legal review and any legal wording.
 4. Portal Category.

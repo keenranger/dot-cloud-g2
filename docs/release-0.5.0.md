@@ -51,7 +51,7 @@ Test counts are from the worker reports at the time they ran. Re-run the integra
 3. Native Sites deploy (applies migration `0003`), then a hosted check of the retention tool and the erase route.
 4. Activation of the 03:00 Asia/Seoul purge schedule, and a verified run, before any copy describes automatic physical deletion.
 5. Even Hub upload of 0.5.0 as Private, then physical iPhone + G2 QA (erase sync, relaunch persistence, audio status, locked phone).
-6. Owner approval of public display name, support email and portal phone/address scope; legal review of policy and terms. Beta promotion and review submission are separate decisions.
+6. Public developer identity/contact approved 2026-10-24: keenranger / kghnkl0103@gmail.com. Portal phone/address scope, legal review of policy and terms, effective date and hosting remain unresolved; mailbox operation is unverified. Beta promotion and review submission are separate decisions.
 
 ## Local retention verification update
 
@@ -70,3 +70,7 @@ Final parent checks passed: root tests 76/76, companion tests 98/98, root lint/t
 Two independent source-only exports of `1341bea`, isolated dependency stores, frozen pnpm 12.14.0 installs and companion builds under Node 24.13.0 (Darwin arm64) passed. All 17 dist paths and SHA-256 values matched each other and the candidate. See `outputs/release-readiness/final-clean-build.md`; this is local build evidence only.
 
 Later documentation-only commits do not change this artifact’s source provenance (`1341bea`).
+
+## Approved public developer and contact
+
+The owner approved public developer/operator display name **keenranger** and public support/privacy email **kghnkl0103@gmail.com** on 2026-10-24. This approval covers use of these values, not publication, a legal personal name, or verification that the mailbox is operational. Policy approval, legal effective date, hosting, phone/address and any legal jurisdiction wording remain unresolved. No portal or publishing action is authorized by this identity approval.

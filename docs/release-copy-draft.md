@@ -1,6 +1,6 @@
 # Store and privacy copy — owner review draft
 
-**DRAFT — not published, not legally reviewed, not approved for public use.** Current production: Even Hub 0.4.2 (Private build) and a relay without retention/deletion. Local candidate: 0.5.0 (source base `a266438` plus local backend and companion changes; bounded corrected-source review clean; hosted validation pending; not deployed or uploaded). Operator public display name and support email are pending owner approval, and whether the portal shows telephone/address publicly is unconfirmed. Native Sites publishing, Even Hub upload/update, beta promotion and review submission are not authorized for this candidate.
+**DRAFT — not published, not legally reviewed, not approved for public use.** Current production: Even Hub 0.4.2 (Private build) and a relay without retention/deletion. Local candidate: 0.5.0 (source base `a266438` plus local backend and companion changes; bounded corrected-source review clean; hosted validation pending; not deployed or uploaded). The owner approved public developer name keenranger and support/privacy email kghnkl0103@gmail.com on 2026-10-24; whether the portal shows telephone/address publicly remains unconfirmed. Native Sites publishing, Even Hub upload/update, beta promotion and review submission are not authorized for this candidate.
 
 Live portal state on 2026-10-24 (`outputs/release-readiness/environment-audit.md`): name `Lens MCP for G2`, tagline, permissions text and icon are present. Category is unset. Screenshots, cover, privacy/terms URLs and developer contact details are missing. No review build is selected and nothing is submitted.
 
@@ -39,7 +39,7 @@ No API key or secret is bundled in the package. Voice transcription uses a Sonio
 - Relay domain: https://hey-dots-g2.keenranger.chatgpt.site . Soniox: wss://stt-rt.soniox.com . The network whitelist includes the matching HTTPS Soniox host. Do not bundle keys in distributable packages.
 - No claim of medical, financial or emergency use. No optical display confirmation is available from the server.
 
-Selected name: Lens MCP for G2. Open owner decisions: operator public display name and public support email; whether portal telephone/address are public; publishable privacy/terms location and legal review; portal Category; reviewer test-account provisioning; final description and localized release notes after physical QA. Settled: 30-day retention with owner erase; iPhone + G2 target; default-on Hey dots, including while the phone is locked or backgrounded, with the explicit choice remembered; session-only Soniox key with explicit remember opt-in.
+Selected name: Lens MCP for G2. Approved public developer/contact (2026-10-24): keenranger / kghnkl0103@gmail.com. Open owner decisions: whether portal telephone/address are public; publishable privacy/terms location and legal review; portal Category; reviewer test-account provisioning; final description and localized release notes after physical QA. Settled: 30-day retention with owner erase; iPhone + G2 target; default-on Hey dots, including while the phone is locked or backgrounded, with the explicit choice remembered; session-only Soniox key with explicit remember opt-in.
 
 ### Candidate retention clarification — DRAFT
 
@@ -47,4 +47,4 @@ Physical sweeps delete expired conversation content and atomically leave owner-s
 
 Each maintenance invocation targets at most 20,000 rows and uses at most 41 SQL statements including rate limiting. Fence insertion and later deletion add metadata storage and index writes; hosted D1 plan, quota, actual rows written and batch-result behavior remain unverified activation gates. Measure the first hosted sweep before activating the intended daily 03:00 Asia/Seoul cleanup. The schedule remains unactivated.
 
-Operator identity, support details, effective dates and hosting placeholders remain DRAFT and require approval. No policy approval, hosting, schedule activation or public readiness is established.
+Public developer/contact values are approved as keenranger / kghnkl0103@gmail.com (2026-10-24); mailbox operation is unverified. Effective dates, hosting, phone/address and policy approval remain unresolved. No policy approval, hosting, schedule activation or public readiness is established.

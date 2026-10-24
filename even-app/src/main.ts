@@ -689,6 +689,9 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
   const owner = caption?.voice === voice && captionHolds() ? voice : undefined;
   captureText("음성 전사 마무리 중 · 아직 전송 전", owner, CAPTION_FINISHING);
   let kept = false;
+  // Once the transcript was handed to the relay, a failure leaves its storage unknown, so G2 must not say "not sent".
+  let submitted = false;
+  let notice = CAPTURE_STOPPED;
   try {
     await completeVoice({
       transcribe: () => voice.stream.end(),
@@ -712,7 +715,10 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
         displayText("전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
         return next.draft;
       },
-      send: (text) => sendText(text, version, id, voice.revision),
+      send: (text) => {
+        submitted = true;
+        return sendText(text, version, id, voice.revision);
+      },
       // A failed automatic send leaves the transcript in the field as review mode would, on the same connection only.
       keep: (text) => {
         if (!current(version)) return;
@@ -725,6 +731,7 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
       },
     });
   } catch (e) {
+    if (submitted) notice = e instanceof Error ? e.message : "전송 결과를 확인하지 못했습니다.";
     if (kept)
       throw new Error(
         `${e instanceof Error ? e.message : "전송하지 못했습니다."} 전사 결과를 입력란에 남겼습니다. 확인한 뒤 다시 전송하세요.`,
@@ -740,7 +747,7 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
   } finally {
     transcriptions.delete(voice.entry);
     showPartial("");
-    releaseCaption(voice);
+    releaseCaption(voice, notice);
   }
 }
 function startRecording(): void {

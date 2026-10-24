@@ -1079,3 +1079,43 @@ test("reply polls during a slow running-text acknowledgement keep the display st
     h.restore();
   }
 });
+
+test("an automatic submission whose response is lost or times out says storage is unconfirmed, never not sent, and is not replayed", async () => {
+  for (const lost of ["network", "timeout"]) {
+    const h = await boot({
+      storage: ready,
+      fetch: (_url, init) => {
+        if (init?.method !== "POST")
+          return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+        // The relay may already have stored the utterance; only its response is lost.
+        h.posts.push(init);
+        if (lost === "network") return Promise.reject(new TypeError("Failed to fetch"));
+        return new Promise((_resolve, reject) =>
+          init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+        );
+      },
+    });
+    try {
+      await h.event(EVENT.LONG_PRESS, "textEvent");
+      await h.frame();
+      const socket = h.sockets.at(-1);
+      partial(socket, ["내일 일정"]);
+      await h.flush();
+      await h.event(EVENT.RELEASE, "textEvent");
+      socket.reply({ tokens: [{ text: "내일 일정 알려줘", is_final: true }], finished: true });
+      await h.flush();
+      if (lost === "timeout") await h.fire(45000);
+      assert.equal(h.posts.length, 1, `${lost}: one submission`);
+      const body = bodies(h).at(-1);
+      assert.ok(!body.includes("전송하지 않았습니다"), `${lost}: G2 does not claim it was not sent: ${body}`);
+      assert.ok(!body.includes("미확정"), `${lost}: the running text does not stay`);
+      assert.match(body, /저장 여부는 확인되지 않았습니다/, `${lost}: G2 says storage is unconfirmed`);
+      assert.match(h.get("status").textContent, /저장 여부는 확인되지 않았습니다/, `${lost}: so does the phone`);
+      assert.equal(h.get("text").value, "내일 일정 알려줘", `${lost}: the transcript stays for an explicit resend`);
+      for (let i = 0; i < 3; i++) await h.fire(2500);
+      assert.equal(h.posts.length, 1, `${lost}: nothing is replayed automatically`);
+    } finally {
+      h.restore();
+    }
+  }
+});

@@ -25,6 +25,8 @@ const status = (text: string) => {
 const storageKey = "dot-cloud-device-v1";
 let bridge: EvenAppBridge | undefined;
 let ready = false;
+// False between a pagehide that unloads the page and any later pageshow; the page is not running then.
+let pageLoaded = true;
 // The G2 page is in the glasses foreground. Phone page visibility is deliberately not tracked: a locked phone or a
 // backgrounded Even app keeps Hey dots, manual capture and reply polling running.
 let active = true;
@@ -376,10 +378,10 @@ function renderDisplay(): void {
     .then(async () => {
       if (!ready || !bridge || !active || !current(connectionVersion) || version !== displayVersion) return;
       // Status goes to the header only; an unchanged body is not rewritten, so its native scroll position stays.
-      const headerOk = await g2.show(2, "microphone", g2Header());
-      if (!current(connectionVersion) || version !== displayVersion) return;
       // The whole reply goes to the event-capturing container, which scrolls it natively on G2.
       const ok = await g2.show(1, "reply", content, key);
+      if (!current(connectionVersion) || version !== displayVersion) return;
+      const headerOk = await g2.show(2, "microphone", g2Header());
       if (!current(connectionVersion) || version !== displayVersion) return;
       displayStatus(
         ok && headerOk ? "G2가 표시 갱신을 확인했습니다." : "G2 표시 갱신 실패 · 휴대폰에서 답변을 확인하세요.",
@@ -481,7 +483,11 @@ async function poll(): Promise<void> {
       showSelectedReply();
     } else if (history.revision !== revision && selection === replyNotice) restoreReader();
     // New replies behind the reader only change the header position; the body keeps its scroll.
-    else if (history.revision !== revision) renderDisplay();
+    else if (
+      history.revision !== revision ||
+      (ready && (!g2.has(2, g2Header()) || !g2.has(1, segmentContent(parts, part), `${selection}#${part}`)))
+    )
+      renderDisplay();
   } catch (e) {
     if (current(version) && active) report(e);
   } finally {
@@ -933,7 +939,8 @@ function pause(): void {
 function resume(): void {
   // A repeated FOREGROUND_ENTER, or one after a gesture already resumed, changes nothing: no body rewrite that would
   // reset native scroll, no second poll, and no wake epoch bump that would drop a queued Hey dots command.
-  if (exited || active) return;
+  // An unloaded page stays paused until pageshow, whatever G2 event arrives.
+  if (exited || active || !pageLoaded) return;
   active = true;
   // The pause discarded that capture, so the reader comes back instead; a draft in the text field stays as it is.
   if (selection === captureNotice) {
@@ -947,9 +954,21 @@ function resume(): void {
   void poll();
   renderDisplay();
 }
+// Phone visibility is not the glasses session lifecycle, so there is no page visibility gate: a locked phone keeps
+// the session running. Only a genuine page unload (pagehide) or a host event pauses it.
+window.addEventListener("pagehide", (event) => {
+  // A page kept in the back-forward cache is frozen, not unloaded, and pageshow brings it back unchanged.
+  if (event.persisted) return;
+  pageLoaded = false;
+  pause();
+});
+window.addEventListener("pageshow", () => {
+  pageLoaded = true;
+  resume();
+});
 // Outside the Even app the bridge never appears; say so instead of waiting silently.
 const bridgeWait = setTimeout(() => {
-  if (!bridge) status("Even 앱을 찾지 못했습니다. Even 앱의 Dot Cloud에서 열어 주세요.");
+  if (!bridge) status("Even 앱을 찾지 못했습니다. Even 앱의 Lens MCP for G2에서 열어 주세요.");
 }, 10000);
 // Fences startup restoration from the start, before any await.
 const startup = generation;
@@ -985,6 +1004,7 @@ void (async () => {
   );
   if (result !== 0) throw new Error("G2 시작 화면을 만들지 못했습니다. Even 앱에서 다시 여세요.");
   ready = true;
+  active = pageLoaded;
   controls();
   bridge.onEvenHubEvent((event) => {
     if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && wakeMicOpen && wakeAllowed())
@@ -1016,7 +1036,7 @@ void (async () => {
       return status("G2에서 앱이 전환되어 듣기, 녹음과 답변 확인을 멈췄습니다. G2에서 다시 열면 이어집니다.");
     }
     if (step === "enter") {
-      if (!active && !exited) status("G2에서 앱으로 돌아와 듣기와 답변 확인을 다시 시작합니다.");
+      if (!active && !exited && pageLoaded) status("G2에서 앱으로 돌아와 듣기와 답변 확인을 다시 시작합니다.");
       return resume();
     }
     // The exit confirmation stays reachable even while the page is paused.

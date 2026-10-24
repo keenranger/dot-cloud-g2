@@ -42,7 +42,15 @@ test("a G2 gesture counts as foreground input, but audio frames and lifecycle ev
 
 test("hiding or locking the phone does not pause listening, capture or polling", () => {
   // Phone page visibility is not G2 foreground state, so the companion registers no listener for it.
-  assert.doesNotMatch(main, /visibilitychange|document\.hidden|visibilityState|pagehide|pageshow|\bblur\b/);
+  assert.doesNotMatch(main, /visibilitychange|document\.hidden|visibilityState|\bblur\b/);
+  // Only a genuine page unload fences the session: pagehide marks the page unloaded and pageshow brings it back.
+  assert.match(
+    main,
+    /addEventListener\("pagehide", \(event\) => \{\s+\/\/[^\n]*\n\s+if \(event\.persisted\) return;\s+pageLoaded = false;\s+pause\(\);\s+\}\);/,
+  );
+  assert.match(main, /addEventListener\("pageshow", \(\) => \{\s+pageLoaded = true;\s+resume\(\);\s+\}\);/);
+  // A G2 startup that settles after pagehide stays paused.
+  assert.match(main, /ready = true;\s+active = pageLoaded;/);
   assert.match(main, /let active = true;/);
   // The lifecycle step drives pause and resume.
   assert.match(main, /step === "leave"\) \{\s+pause\(\);/);
@@ -63,7 +71,7 @@ const body = (name: string) => main.slice(main.indexOf(`function ${name}(`)).spl
 
 test("an ENTER for a page that is already active returns before any rewrite, poll or wake change", () => {
   const resume = body("resume");
-  const guard = resume.indexOf("if (exited || active) return;");
+  const guard = resume.indexOf("if (exited || active || !pageLoaded) return;");
   assert.ok(guard > 0, "resume() must be a no-op while active");
   for (const effect of ["g2.forget()", "syncWake()", "void poll()", "renderDisplay()"])
     assert.ok(resume.indexOf(effect) > guard, effect);

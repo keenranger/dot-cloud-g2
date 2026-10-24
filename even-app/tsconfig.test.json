@@ -11,6 +11,7 @@
     "src/g2-display.test.ts",
     "src/g2-guide.test.ts",
     "src/g2-lifecycle.test.ts",
-    "src/protocol.test.ts"
+    "src/protocol.test.ts",
+    "src/preferences.test.ts"
   ]
 }

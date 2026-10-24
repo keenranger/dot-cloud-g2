@@ -9,6 +9,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { boundaryStep, pairCode, relayOrigin, segmentContent, segments } from "./protocol.ts";
 import { G2Text } from "./g2-display.ts";
+import { CAPTION_FINISHING, CAPTION_LIVE, captionBody } from "./g2-caption.ts";
 import { ExitRequest, edgeNote, idleBody } from "./g2-guide.ts";
 import { g2LifecycleStep, gesture } from "./g2-lifecycle.ts";
 import "./style.css";
@@ -18,6 +19,7 @@ import { SonioxKey } from "./soniox-key.ts";
 import { MessageHistory, type Reply } from "./message-history.ts";
 import { loadWakeDetector, type WakeDetector } from "./wake-detector.ts";
 import { WAKE_BLOCKED, canListen, finishWakeClip, wakeBlocker, type WakeConditions } from "./wake-gate.ts";
+import { PreferenceStore, UNKNOWN_PREFERENCES } from "./preferences.ts";
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = (text: string) => {
   el("status").textContent = text;
@@ -54,6 +56,9 @@ let replyNotice: string | undefined;
 let headerNote: { text: string; view: string } | undefined;
 // A notice that says a capture is in progress; a pause discards the capture, so the notice must not come back with the page.
 let captureNotice: string | undefined;
+// The voice whose running text the capture notice shows on G2. It holds the body only while that notice is still
+// selected; a reply arriving meanwhile waits, and the user moving to a message ends it.
+let caption: { voice: LiveVoice; heading: string; label: string; text: string } | undefined;
 const view = () => `${selection}#${part}@${history.revision}`;
 const g2 = new G2Text((containerID, containerName, content) =>
   bridge!.textContainerUpgrade(
@@ -73,6 +78,24 @@ let keyBusy = false;
 let restored = false;
 let wakeDetector: WakeDetector | undefined;
 let wakeMicOpen = false;
+// The host did not confirm a G2 microphone stop, so it may still be open. Nothing opens it again until a stop is
+// confirmed, and that stop is retried only on an explicit trigger: a G2 resume or exit, a long press, or the toggle.
+let micUnconfirmed = false;
+const MIC_STOP_UNCONFIRMED = "마이크 중지를 확인하지 못했습니다. 길게 눌러 다시 시도하거나 Even 앱에서 종료하세요.";
+// An audioControl acknowledgement only says the host accepted the request; G2 frames show audio is arriving. The SDK
+// documents no frame cadence and may withhold frames in silence, so missing frames are reported as unknown and never
+// close, reopen or discard anything.
+const FIRST_FRAME_MS = 4000;
+const FRAME_GAP_MS = 6000;
+let micFrames = 0;
+let livenessTimer: ReturnType<typeof setTimeout> | undefined;
+// No frame arrived within the bounded wait; the next frame clears it.
+let audioQuiet = false;
+// Saved voice preferences are read before Hey dots may open the microphone; until then both checkboxes are locked.
+let settingsLoaded = false;
+let settingsNote: string | undefined;
+const SETTINGS_UNREAD = "저장된 음성 설정을 불러오지 못해 Hey dots와 자동 전송을 꺼 두었습니다. 필요하면 다시 켜세요.";
+const preferences = new PreferenceStore(() => bridge!);
 let wakeEpoch = 0;
 let wakeLabel = "마이크 꺼짐";
 // Typed or reviewed text keeps one utterance id until it is accepted, so an identical resend is idempotent on the relay.
@@ -85,6 +108,8 @@ interface LiveVoice {
   id: string;
   version: number;
   keyRevision: number;
+  // History revision when the capture began; a reply received after it is shown once the capture is submitted.
+  revision: number;
 }
 let manualVoice: LiveVoice | undefined;
 let wakeVoice: LiveVoice | undefined;
@@ -122,6 +147,7 @@ function keyNotice(): void {
 }
 function wakeState(): WakeConditions {
   return {
+    settings: settingsLoaded,
     enabled: el<HTMLInputElement>("wake-enabled").checked,
     active: active && !exited,
     ready,
@@ -140,13 +166,48 @@ function wakeNotice(text: string): void {
   wakeLabel = text;
   if (ready) renderDisplay();
 }
-function syncWake(): void {
+/** Asks the host to stop the G2 microphone and records whether the stop was confirmed. */
+async function closeMic(): Promise<boolean> {
+  clearTimeout(livenessTimer);
+  const ok = await bridge!.audioControl(false, AudioInputSource.Glasses).catch(() => false);
+  micUnconfirmed = !ok;
+  return ok;
+}
+/**
+ * Observes whether G2 frames arrive while a microphone is open. Without frames it only says reception is unconfirmed;
+ * the microphone, detector and capture stay as they are, and it stops observing until the next frame.
+ */
+function watchAudio(): void {
+  clearTimeout(livenessTimer);
+  const seen = micFrames;
+  livenessTimer = setTimeout(
+    () => {
+      if (!wakeMicOpen && !recording) return;
+      if (micFrames > seen) return watchAudio();
+      audioQuiet = true;
+      wakeNotice(
+        recording
+          ? "수동 녹음 중 · G2 오디오 수신 확인 안 됨 · 말하면 이어서 받습니다."
+          : "Hey dots 듣는 중 · G2 오디오 수신 확인 안 됨 · 조용하면 정상일 수 있습니다.",
+      );
+    },
+    seen ? FRAME_GAP_MS : FIRST_FRAME_MS,
+  );
+}
+/** `retry` marks an explicit trigger, which may retry one unconfirmed microphone stop. */
+function syncWake(retry = false): void {
   if (!wakeAllowed()) {
     wakeEpoch++;
     wakeDetector?.cancel();
     // Hey dots is on by default, so the label says which prerequisite is missing rather than implying it listens.
     const reason = () => WAKE_BLOCKED[wakeBlocker(wakeState()) ?? "enabled"];
-    wakeNotice(wakeMicOpen ? "마이크 중지 요청 중" : reason());
+    wakeNotice(
+      wakeMicOpen || (micUnconfirmed && retry)
+        ? "마이크 중지 요청 중"
+        : micUnconfirmed
+          ? MIC_STOP_UNCONFIRMED
+          : reason(),
+    );
     // A wake capture that has not finished yet is withdrawn with its Soniox session.
     discardVoice(wakeVoice);
     wakeVoice = undefined;
@@ -155,12 +216,12 @@ function syncWake(): void {
     queueMic(async () => {
       wakeDetector?.dispose();
       wakeDetector = undefined;
-      if (wakeMicOpen) {
-        if (!(await bridge!.audioControl(false, AudioInputSource.Glasses))) {
-          wakeNotice("마이크 중지를 확인하지 못했습니다. Even 앱에서 종료하세요.");
+      if (wakeMicOpen || (micUnconfirmed && retry)) {
+        wakeMicOpen = false;
+        if (!(await closeMic())) {
+          wakeNotice(MIC_STOP_UNCONFIRMED);
           return;
         }
-        wakeMicOpen = false;
         wakeNotice(
           !el<HTMLInputElement>("wake-enabled").checked
             ? "Hey dots 꺼짐 · 마이크 꺼짐"
@@ -168,6 +229,10 @@ function syncWake(): void {
               ? "Hey dots 사용 불가 · Soniox 키 없음 · 마이크 꺼짐"
               : "Hey dots 일시 중지 · 마이크 꺼짐",
         );
+        return;
+      }
+      if (micUnconfirmed) {
+        wakeNotice(MIC_STOP_UNCONFIRMED);
         return;
       }
       // With no microphone to close, the label keeps the reason, so repeated calls such as keystrokes do not rewrite
@@ -178,6 +243,11 @@ function syncWake(): void {
   }
   queueMic(async () => {
     if (!wakeAllowed() || wakeMicOpen) return;
+    if (micUnconfirmed) {
+      // Never open over a microphone that may still be on; only an explicit trigger retries the stop.
+      if (!retry || !(await closeMic())) return wakeNotice(MIC_STOP_UNCONFIRMED);
+      if (!wakeAllowed()) return;
+    }
     const epoch = ++wakeEpoch;
     const version = generation;
     wakeNotice("Hey dots 로컬 감지 모델 준비 중");
@@ -192,7 +262,7 @@ function syncWake(): void {
             discardVoice(wakeVoice);
             wakeVoice = openVoice(version, true);
             wakeNotice("Hey dots 감지됨 · 이제 질문을 말하세요.");
-            captureText("Hey dots 감지됨 · 질문을 말하세요.");
+            captureText("Hey dots 감지됨 · 질문을 말하세요.", wakeVoice);
           } else {
             const voice = wakeVoice;
             wakeVoice = undefined;
@@ -246,15 +316,18 @@ function syncWake(): void {
       if (!(await bridge!.audioControl(true, AudioInputSource.Glasses)))
         throw new Error("G2 마이크를 시작하지 못했습니다.");
       wakeMicOpen = true;
+      micFrames = 0;
+      audioQuiet = false;
       if (!wakeAllowed() || epoch !== wakeEpoch || !current(version)) {
         detector.dispose();
         wakeDetector = undefined;
-        if (await bridge!.audioControl(false, AudioInputSource.Glasses)) wakeMicOpen = false;
-        else wakeNotice("마이크 중지를 확인하지 못했습니다. Even 앱에서 종료하세요.");
+        wakeMicOpen = false;
+        if (!(await closeMic())) wakeNotice(MIC_STOP_UNCONFIRMED);
         return;
       }
       detector.listen();
-      wakeNotice("마이크 켜짐 · 휴대폰에서 Hey dots 로컬 감지 중 · 감지 전 소리는 서버에 보내지 않습니다.");
+      wakeNotice("G2 마이크 시작 요청 수락 · 오디오 수신 대기 중");
+      watchAudio();
     } catch (e) {
       el<HTMLInputElement>("wake-enabled").checked = false;
       syncWake();
@@ -267,7 +340,17 @@ const current = (version: number) => !exited && generation === version;
 function controls(): void {
   const typed = !!el<HTMLTextAreaElement>("text").value.trim();
   el<HTMLButtonElement>("record").disabled =
-    !ready || !credentials || !sonioxKey.value || busy || recordingWanted || recording || !active || typed;
+    !ready ||
+    !settingsLoaded ||
+    !credentials ||
+    !sonioxKey.value ||
+    busy ||
+    recordingWanted ||
+    recording ||
+    !active ||
+    typed;
+  // The page default must not be saved over a choice that is still being read.
+  el<HTMLInputElement>("wake-enabled").disabled = el<HTMLInputElement>("auto-send").disabled = !settingsLoaded;
   el<HTMLButtonElement>("stop").disabled = !recordingWanted && !recording;
   el<HTMLButtonElement>("send").disabled =
     !credentials || busy || recordingWanted || !el<HTMLTextAreaElement>("text").value.trim();
@@ -280,15 +363,17 @@ function controls(): void {
     ? "Even 앱 연결을 기다리는 중입니다."
     : !ready
       ? "G2 화면을 준비하는 중입니다."
-      : !credentials
-        ? "녹음하려면 먼저 서버에 연결하세요."
-        : !sonioxKey.value
-          ? "녹음하려면 Soniox 키가 필요합니다. 아래에 직접 입력해 전송할 수는 있습니다."
-          : busy
-            ? "이전 요청을 처리하는 중입니다."
-            : typed && !recordingWanted && !recording
-              ? DRAFT_PENDING
-              : "";
+      : !settingsLoaded
+        ? "저장된 음성 설정을 불러오는 중입니다."
+        : !credentials
+          ? "녹음하려면 먼저 서버에 연결하세요."
+          : !sonioxKey.value
+            ? "녹음하려면 Soniox 키가 필요합니다. 아래에 직접 입력해 전송할 수는 있습니다."
+            : busy
+              ? "이전 요청을 처리하는 중입니다."
+              : typed && !recordingWanted && !recording
+                ? DRAFT_PENDING
+                : "";
   if (el("record-hint").textContent !== hint) el("record-hint").textContent = hint;
   el("record-hint").hidden = !hint;
   el<HTMLButtonElement>("prev-message").disabled = history.index <= 0;
@@ -348,7 +433,8 @@ function cancelRequests(): void {
   requests = new Set();
   abortTranscriptions(() => true);
 }
-function renderDisplay(): void {
+/** `quiet` marks running text on G2: the phone display status announces neither each partial nor a poll's retry. */
+function renderDisplay(quiet = captionShown()): void {
   const version = ++displayVersion;
   const connectionVersion = generation;
   // Until the first reply or notice, the body names the next setup step.
@@ -373,7 +459,7 @@ function renderDisplay(): void {
   el<HTMLButtonElement>("next").disabled = part === parts.length - 1;
   // A render that writes nothing, such as a keystroke, leaves the display status alone instead of announcing it again.
   if (!ready) displayStatus("G2 연결 전 · 휴대폰에서 읽을 수 있습니다.");
-  else if (!g2.has(2, g2Header()) || !g2.has(1, content, key)) displayStatus("G2 표시 요청 중");
+  else if (!quiet && (!g2.has(2, g2Header()) || !g2.has(1, content, key))) displayStatus("G2 표시 요청 중");
   displayQueue = displayQueue
     .then(async () => {
       if (!ready || !bridge || !active || !current(connectionVersion) || version !== displayVersion) return;
@@ -384,7 +470,11 @@ function renderDisplay(): void {
       const headerOk = await g2.show(2, "microphone", g2Header());
       if (!current(connectionVersion) || version !== displayVersion) return;
       displayStatus(
-        ok && headerOk ? "G2가 표시 갱신을 확인했습니다." : "G2 표시 갱신 실패 · 휴대폰에서 답변을 확인하세요.",
+        !(ok && headerOk)
+          ? "G2 표시 갱신 실패 · 휴대폰에서 답변을 확인하세요."
+          : quiet
+            ? "G2에 실시간 인식(미확정) 표시 중"
+            : "G2가 표시 갱신을 확인했습니다.",
       );
     })
     .catch(() => {
@@ -419,13 +509,51 @@ function displayText(text: string): void {
   selection = `notice:${++notices}`;
   renderDisplay();
 }
-function captureText(text: string): void {
-  displayText(text);
+/** A capture notice; with `voice`, its running text is shown under `label` once Soniox reports any. */
+function captureText(text: string, voice?: LiveVoice, label = CAPTION_LIVE): void {
+  // The same voice moving on to finishing keeps what was already heard, unless the user has left its notice.
+  const heard = voice && caption?.voice === voice && selection === captureNotice ? caption.text : "";
+  displayText(heard ? captionBody(label, heard) : text);
   captureNotice = selection;
+  caption = voice ? { voice, heading: text, label, text: heard } : undefined;
+}
+function captionHolds(): boolean {
+  return !!caption && selection === captureNotice;
+}
+function captionShown(): boolean {
+  return captionHolds() && !!caption!.text;
+}
+/** Shows a partial on G2 only while its own capture notice is selected; writes are paced by G2 acknowledgements. */
+function showCaption(voice: LiveVoice, text: string): void {
+  if (caption?.voice !== voice || !captionHolds()) return;
+  caption.text = text;
+  parts = segments(text ? captionBody(caption.label, text) : caption.heading);
+  part = 0;
+  renderDisplay(true);
+}
+const CAPTURE_STOPPED = "음성 입력을 멈췄습니다 · 전송하지 않았습니다.";
+/**
+ * A voice that ends without submission while its notice still holds the body: a reply received during the capture
+ * comes back in its place, otherwise `notice` says the capture stopped. Unconfirmed text never stays on G2.
+ * Returns whether the body was replaced.
+ */
+function releaseCaption(voice: LiveVoice | undefined, notice = CAPTURE_STOPPED): boolean {
+  if (!voice || caption?.voice !== voice) return false;
+  const held = captionHolds();
+  caption = undefined;
+  // A paused page keeps the capture notice selected, so resume brings the reader back.
+  if (!held || !active) return false;
+  if (history.revision !== voice.revision && history.selected) restoreReader();
+  else displayText(notice);
+  return true;
 }
 /** A reply arrived behind the reader while G2 waited for it: the message being read comes back in place of the notice. */
 function restoreReader(): void {
-  status("Dot 답변 수신 · 읽던 메시지로 돌아갑니다. 새 답변은 다음 메시지로 이동해 확인하세요.");
+  status(
+    history.index < history.messages.length - 1
+      ? "Dot 답변 수신 · 읽던 메시지로 돌아갑니다. 새 답변은 다음 메시지로 이동해 확인하세요."
+      : "Dot 답변 수신 · G2에 최신 답변을 표시합니다.",
+  );
   showSelectedReply();
 }
 function moveMessage(delta: number): void {
@@ -478,7 +606,11 @@ async function poll(): Promise<void> {
     const revision = history.revision;
     const changed = history.receive(result.messages);
     controls();
-    if (changed) {
+    if (changed && captionHolds()) {
+      // The phone shows the reply now; G2 keeps the running speech and shows the reply when the capture is submitted.
+      el("reply").textContent = history.selected!.text;
+      status("Dot 답변 수신 · 음성 입력 중이라 G2에는 전송 후 표시합니다.");
+    } else if (changed) {
       status("Dot 답변 수신 · G2 표시를 요청합니다.");
       showSelectedReply();
     } else if (history.revision !== revision && selection === replyNotice) restoreReader();
@@ -526,12 +658,15 @@ function openVoice(version: number, wake: boolean): LiveVoice | undefined {
     id: crypto.randomUUID(),
     version,
     keyRevision: sonioxKey.revision,
+    revision: history.revision,
     stream: openSonioxStream({
       credential: () => key,
       signal: entry.controller.signal,
-      // Phone-only running text; G2, history and submission wait for the final transcript.
+      // Running text is shown, marked unconfirmed; history and submission wait for the final transcript.
       onPartial: (text) => {
-        if (voiceLive(voice)) showPartial(text);
+        if (!voiceLive(voice)) return;
+        showPartial(text);
+        showCaption(voice, text);
       },
     }),
   };
@@ -544,13 +679,19 @@ function discardVoice(voice: LiveVoice | undefined): void {
   voice.entry.controller.abort();
   transcriptions.delete(voice.entry);
   showPartial("");
+  releaseCaption(voice);
 }
 async function finishVoice(voice: LiveVoice): Promise<void> {
   const { version, id } = voice;
   if (!current(version) || !active) return discardVoice(voice);
   status("음성 전사 마무리 중 · Soniox 최종 결과 대기");
-  captureText("음성 전사 마무리 중 · 아직 전송 전");
+  // After the user moved to a message, the finishing notice no longer shows this voice's running text.
+  const owner = caption?.voice === voice && captionHolds() ? voice : undefined;
+  captureText("음성 전사 마무리 중 · 아직 전송 전", owner, CAPTION_FINISHING);
   let kept = false;
+  // Once the transcript was handed to the relay, a failure leaves its storage unknown, so G2 must not say "not sent".
+  let submitted = false;
+  let notice = CAPTURE_STOPPED;
   try {
     await completeVoice({
       transcribe: () => voice.stream.end(),
@@ -571,10 +712,16 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
             ? "전사 완료 · 내용을 확인한 뒤 전송하세요."
             : "전사 완료 · 입력 중이던 내용 뒤에 전사 결과를 붙였습니다. 확인한 뒤 전송하세요.",
         );
-        displayText("전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
+        // A reply received during the capture comes back in place of the notice; the phone keeps the review prompt.
+        if (caption?.voice === voice && captionHolds() && history.revision !== voice.revision && history.selected)
+          showSelectedReply();
+        else displayText("전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
         return next.draft;
       },
-      send: (text) => sendText(text, version, id),
+      send: (text) => {
+        submitted = true;
+        return sendText(text, version, id, voice.revision);
+      },
       // A failed automatic send leaves the transcript in the field as review mode would, on the same connection only.
       keep: (text) => {
         if (!current(version)) return;
@@ -587,24 +734,32 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
       },
     });
   } catch (e) {
+    if (submitted) notice = e instanceof Error ? e.message : "전송 결과를 확인하지 못했습니다.";
     if (kept)
       throw new Error(
         `${e instanceof Error ? e.message : "전송하지 못했습니다."} 전사 결과를 입력란에 남겼습니다. 확인한 뒤 다시 전송하세요.`,
       );
     if (!(e instanceof SonioxTranscriptionError)) throw e;
-    // Cancellation by a key change or Hey dots off still replaces the "transcribing" notice on G2.
-    if (current(version) && active) showNotice(sttMessage(e));
+    // Cancellation by a key change or Hey dots off still replaces the "transcribing" notice on G2, unless a reply
+    // received during the capture comes back in its place; the phone status keeps the reason either way.
+    if (current(version) && active) {
+      const message = sttMessage(e);
+      if (releaseCaption(voice, message)) status(message);
+      else showNotice(message);
+    }
   } finally {
     transcriptions.delete(voice.entry);
     showPartial("");
+    releaseCaption(voice, notice);
   }
 }
 function startRecording(): void {
-  if (!ready || !credentials || recordingWanted || recording || busy || !active || !bridge) return;
+  if (!ready || !settingsLoaded || !credentials || recordingWanted || recording || busy || !active || !bridge) return;
   if (!sonioxKey.value) return showNotice(NO_KEY);
   if (el<HTMLTextAreaElement>("text").value.trim()) return showNotice(DRAFT_PENDING);
   recordingWanted = true;
-  syncWake();
+  // A long press is an explicit trigger, so an unconfirmed earlier stop is retried once before this capture opens.
+  syncWake(true);
   bytes = 0;
   controls();
   const version = generation;
@@ -622,10 +777,10 @@ function startRecording(): void {
   queueMic(async () => {
     try {
       if (!current(version) || !recordingWanted || !active) return withdraw();
-      if (wakeMicOpen) {
+      if (wakeMicOpen || micUnconfirmed) {
         recordingWanted = false;
         withdraw();
-        throw new Error("이전 마이크 중지를 확인한 뒤 다시 시도하세요.");
+        throw new Error(MIC_STOP_UNCONFIRMED);
       }
       if (!(await bridge!.audioControl(true, AudioInputSource.Glasses))) {
         recordingWanted = false;
@@ -633,10 +788,13 @@ function startRecording(): void {
         throw new Error("G2 마이크를 시작하지 못했습니다.");
       }
       recording = true;
-      wakeNotice("마이크 켜짐 · 수동 녹음 중");
+      micFrames = 0;
+      audioQuiet = false;
+      wakeNotice("G2 마이크 시작 요청 수락 · 수동 녹음 오디오 수신 대기 중");
       if (!current(version) || !recordingWanted || !active) return;
+      watchAudio();
       status("녹음 중 · Soniox 실시간 전사 중 · 중지하면 최종 결과를 전송합니다.");
-      captureText("녹음 중 · 손을 떼면 전사 후 전송합니다.");
+      captureText("녹음 중 · 손을 떼면 전사 후 전송합니다.", voice);
       recordingTimer = setTimeout(() => stopRecording(false), 30000);
     } finally {
       // A manual capture that never opened the microphone hands it back to Hey dots.
@@ -655,13 +813,15 @@ function stopRecording(discard: boolean): void {
   queueMic(async () => {
     try {
       if (!recording) return discardVoice(voice);
-      const ok = await bridge!.audioControl(false, AudioInputSource.Glasses);
+      const ok = await closeMic();
+      recording = false;
       if (!ok) {
+        // The capture is over either way; the unconfirmed stop keeps every later open waiting for a confirmed one.
         discardVoice(voice);
-        status("마이크 중지를 확인하지 못했습니다. Even 앱에서 종료하세요.");
+        status(MIC_STOP_UNCONFIRMED);
+        wakeNotice(MIC_STOP_UNCONFIRMED);
         return;
       }
-      recording = false;
       wakeNotice("마이크 꺼짐 · 음성 처리 중");
       bytes = 0;
       if (!voice || discard || !current(version) || !active) return discardVoice(voice);
@@ -707,10 +867,27 @@ el("text").oninput = () => {
   controls();
   syncWake();
 };
-el("wake-enabled").onchange = syncWake;
-async function sendText(text: string, version: number, id: string): Promise<void> {
+/** Saves an explicit choice; a failed write is said, since the next launch would then use the previous choice. */
+function savePreferences(): void {
+  void preferences
+    .save({
+      wake: el<HTMLInputElement>("wake-enabled").checked,
+      autoSend: el<HTMLInputElement>("auto-send").checked,
+    })
+    .then((ok) => {
+      if (ok === false)
+        status("설정을 저장하지 못했습니다. 이번 실행에는 적용되지만 다음 실행에서는 이전 설정이 쓰일 수 있습니다.");
+    });
+}
+el("wake-enabled").onchange = () => {
+  // The toggle is an explicit retry after an unconfirmed stop.
+  savePreferences();
+  syncWake(true);
+};
+el("auto-send").onchange = savePreferences;
+/** `replyRevision` is the history revision a reply must be newer than to replace the submission notice. */
+async function sendText(text: string, version: number, id: string, replyRevision = history.revision): Promise<void> {
   if (!current(version) || !active) return;
-  const replyRevision = history.revision;
   status("서버로 전송 중 · 아직 저장 확인 전");
   const result = await request<{ status: string }>("/api/device/utterances", "POST", utteranceBody(id, text));
   if (!current(version) || !active) return;
@@ -929,7 +1106,8 @@ el("disconnect").onclick = () => {
 /** The G2 page left the glasses foreground or the host is exiting it: listening, capture and polling stop. */
 function pause(): void {
   active = false;
-  syncWake();
+  clearTimeout(livenessTimer);
+  syncWake(true);
   clearTimeout(pollTimer);
   for (const request of requests) request.abort();
   abortTranscriptions(() => true);
@@ -949,7 +1127,8 @@ function resume(): void {
   }
   // G2 may have dropped the page while it was in the background, so resend the current text once.
   g2.forget();
-  syncWake();
+  // Returning to G2 is an explicit retry of an unconfirmed stop.
+  syncWake(true);
   controls();
   void poll();
   renderDisplay();
@@ -961,9 +1140,11 @@ window.addEventListener("pagehide", (event) => {
   if (event.persisted) return;
   pageLoaded = false;
   pause();
+  status("페이지가 닫히거나 내려가 듣기, 녹음과 답변 확인을 멈췄습니다. 페이지가 다시 표시되면 이어집니다.");
 });
 window.addEventListener("pageshow", () => {
   pageLoaded = true;
+  if (!active && !exited) status("페이지가 다시 표시되어 듣기와 답변 확인을 이어갑니다.");
   resume();
 });
 // Outside the Even app the bridge never appears; say so instead of waiting silently.
@@ -976,6 +1157,16 @@ void (async () => {
   bridge = await waitForEvenAppBridge();
   clearTimeout(bridgeWait);
   controls();
+  // Read independently of G2 startup, so a slow read only delays Hey dots, never polling.
+  void preferences.restore().then((saved) => {
+    const choice = saved ?? UNKNOWN_PREFERENCES;
+    el<HTMLInputElement>("wake-enabled").checked = choice.wake;
+    el<HTMLInputElement>("auto-send").checked = choice.autoSend;
+    settingsLoaded = true;
+    if (!saved) status((settingsNote = SETTINGS_UNREAD));
+    controls();
+    syncWake();
+  });
   const result = await bridge.createStartUpPageContainer(
     new CreateStartUpPageContainer({
       containerTotalNum: 2,
@@ -1007,6 +1198,18 @@ void (async () => {
   active = pageLoaded;
   controls();
   bridge.onEvenHubEvent((event) => {
+    if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && (wakeMicOpen || recording)) {
+      // The first frame after an open, or after a quiet spell, is what shows G2 audio is arriving.
+      if (++micFrames === 1 || audioQuiet) {
+        audioQuiet = false;
+        wakeNotice(
+          wakeMicOpen
+            ? "마이크 켜짐 · 휴대폰에서 Hey dots 로컬 감지 중 · 감지 전 소리는 서버에 보내지 않습니다."
+            : "마이크 켜짐 · 수동 녹음 중",
+        );
+        watchAudio();
+      }
+    }
     if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && wakeMicOpen && wakeAllowed())
       wakeDetector?.append(event.audioEvent.audioPcm);
     if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && recordingWanted && recording) {
@@ -1028,7 +1231,12 @@ void (async () => {
       pause();
       exited = true;
       cancelRequests();
-      return;
+      // Terminal either way; the phone says which, so a device run can tell an abnormal exit from a confirmed one.
+      return status(
+        type === OsEventTypeList.ABNORMAL_EXIT_EVENT
+          ? "G2 앱이 비정상 종료되어 듣기, 녹음과 답변 확인을 멈췄습니다. Even 앱에서 다시 여세요."
+          : "G2에서 앱이 종료되어 듣기, 녹음과 답변 확인을 멈췄습니다. 다시 쓰려면 G2에서 앱을 여세요.",
+      );
     }
     if (step === "leave") {
       pause();
@@ -1074,7 +1282,10 @@ void (async () => {
     }
   }
   controls();
-  status(credentials ? "저장된 서버 연결을 사용합니다." : "G2 준비됨 · 서버 주소와 연결 코드를 입력하세요.");
+  status(
+    settingsNote ??
+      (credentials ? "저장된 서버 연결을 사용합니다." : "G2 준비됨 · 서버 주소와 연결 코드를 입력하세요."),
+  );
   syncWake();
   void poll();
 })().catch((e) => {

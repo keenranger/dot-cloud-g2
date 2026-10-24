@@ -285,6 +285,7 @@ test("never writes to the console", async () => {
 test("user notices are fixed per failure kind and carry at most the numeric provider code", () => {
   const kinds = [
     "invalid-audio",
+    "no-audio",
     "credential",
     "aborted",
     "timeout",
@@ -421,7 +422,7 @@ test("end with no audio fails without waiting, and a missing finished after end 
   const stream = openSonioxStream({ credential: () => KEY, createSocket: empty.createSocket });
   await tick();
   empty.calls[0].socket.open();
-  await assert.rejects(stream.end(), { kind: "invalid-audio" });
+  await assert.rejects(stream.end(), { kind: "no-audio" });
   assert.ok(!empty.calls[0].socket.sent.includes(""));
 
   const slow = harness();

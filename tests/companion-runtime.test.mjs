@@ -1134,3 +1134,843 @@ test("a relay that never reports a revision keeps the append-only behavior", asy
     h.restore();
   }
 });
+
+const LIVE = "실시간 인식 (미확정)";
+const FINISHING = "전사 마무리 중 · 미확정 · 아직 전송 전";
+const partial = (socket, ...tokens) =>
+  socket.reply({ tokens: tokens.map(([text, is_final = false]) => ({ text, is_final })) });
+const bodies = (h) => h.writes.filter((w) => w.containerID === 1).map((w) => w.content);
+/** Records every text the phone display status (a polite live region) is set to. */
+function announcements(h) {
+  const display = h.get("display");
+  const said = [];
+  let text = display.textContent;
+  Object.defineProperty(display, "textContent", {
+    get: () => text,
+    set: (value) => {
+      text = value;
+      said.push(value);
+    },
+  });
+  return said;
+}
+
+test("manual hold shows Soniox running text on G2 as unconfirmed, paced by acknowledgements, and submits only the final", async () => {
+  const held = [];
+  let hold = false;
+  const h = await boot({
+    storage: ready,
+    write: (update) => (hold && update.containerID === 1 ? new Promise((resolve) => held.push(resolve)) : true),
+  });
+  try {
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    assert.equal(
+      bodies(h).at(-1),
+      "녹음 중 · 손을 떼면 전사 후 전송합니다.",
+      "the instruction shows until speech is heard",
+    );
+    const said = announcements(h);
+    partial(socket, ["내일"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일`);
+    assert.equal(h.get("partial").textContent, "실시간 인식 (미확정): 내일", "the phone keeps its own running text");
+    // A slow G2 acknowledgement: partials arriving meanwhile are coalesced into one write of the newest text.
+    hold = true;
+    partial(socket, ["내일 ", true], ["일정", false]);
+    await h.flush();
+    const inFlight = bodies(h).length;
+    for (const text of ["일정 알", "일정 알려", "일정 알려줘"]) {
+      partial(socket, [text]);
+      await h.flush();
+    }
+    assert.equal(bodies(h).length, inFlight, "nothing more is written while one update is unacknowledged");
+    hold = false;
+    held.shift()(true);
+    await h.flush();
+    assert.equal(bodies(h).length, inFlight + 1, "one write follows the acknowledgement");
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정 알려줘`, "and it carries the newest running text");
+    assert.deepEqual(said, ["G2에 실시간 인식(미확정) 표시 중"], "the live region is not re-announced per partial");
+    assert.equal(h.posts.length, 0, "running text is never submitted");
+    // Release keeps what was heard under a finishing label until Soniox finishes.
+    await h.event(EVENT.RELEASE, "textEvent");
+    assert.equal(bodies(h).at(-1), `${FINISHING}\n내일 일정 알려줘`);
+    partial(socket, ["일정 알려줘요"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${FINISHING}\n내일 일정 알려줘요`);
+    socket.reply({ tokens: [{ text: "일정 알려줘요", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(h.posts.length, 1, "exactly one submission");
+    assert.equal(JSON.parse(h.posts[0].body).text, "내일 일정 알려줘요", "only the final transcript is sent");
+    assert.match(bodies(h).at(-1), /^서버에 저장됨/, "the submission notice replaces the running text");
+    assert.equal(h.get("partial").hidden, true);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a reply arriving during Hey dots speech waits behind the running text and is shown once the capture is submitted", async () => {
+  const messages = [];
+  const h = await boot({ storage: ready, messages });
+  try {
+    await h.frame();
+    const detector = h.detectors.at(-1);
+    detector.event({ type: "wake" });
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "Hey dots 감지됨 · 질문을 말하세요.");
+    detector.event({ type: "audio", pcm: new Uint8Array(640) });
+    await h.flush();
+    const socket = h.sockets.at(-1);
+    partial(socket, ["오늘 날씨"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨`);
+    messages.push({ message_id: "earlier", text: "이전 질문의 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "이전 질문의 답변", "the phone shows the reply at once");
+    assert.match(h.get("status").textContent, /전송 후 표시/);
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨`, "the reply does not take the G2 body from the speaker");
+    partial(socket, ["오늘 날씨 어때"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨 어때`, "running text keeps updating");
+    detector.event({ type: "clip", wav: new Uint8Array(684), seconds: 1 });
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${FINISHING}\n오늘 날씨 어때`);
+    socket.reply({ tokens: [{ text: "오늘 날씨 어때", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(h.posts.length, 1);
+    assert.equal(JSON.parse(h.posts[0].body).text, "오늘 날씨 어때");
+    assert.equal(bodies(h).at(-1), "이전 질문의 답변", "the waiting reply is shown after submission");
+    assert.match(h.get("status").textContent, /최신 답변/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("moving to a message ends the G2 running text, and finishing does not bring it back", async () => {
+  const h = await boot({
+    storage: ready,
+    messages: [
+      { message_id: "a", text: "첫 답변", createdAt: "2026-10-24T00:00:00Z" },
+      { message_id: "b", text: "둘째 답변", createdAt: "2026-10-24T00:00:01Z" },
+    ],
+  });
+  try {
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    partial(socket, ["질문"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n질문`);
+    h.get("prev-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "첫 답변");
+    const after = bodies(h).length;
+    partial(socket, ["질문 하나"]);
+    await h.flush();
+    assert.equal(bodies(h).length, after, "running text no longer writes over the chosen message");
+    await h.event(EVENT.RELEASE, "textEvent");
+    partial(socket, ["질문 하나요"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "음성 전사 마무리 중 · 아직 전송 전", "the finishing notice stays plain");
+    assert.ok(
+      bodies(h)
+        .slice(after)
+        .every((body) => !body.includes("미확정")),
+    );
+    socket.reply({ tokens: [{ text: "질문 하나요", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(h.posts.length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+test("late running text after a pause, a new cue, Hey dots off or a host exit never reaches G2", async () => {
+  const late = (handler, text) => handler({ data: JSON.stringify({ tokens: [{ text, is_final: false }] }) });
+  const paused = await boot({ storage: ready });
+  try {
+    await paused.event(EVENT.LONG_PRESS, "textEvent");
+    await paused.frame();
+    const socket = paused.sockets.at(-1);
+    const handler = socket.onmessage;
+    partial(socket, ["멈추기 전"]);
+    await paused.flush();
+    await paused.event(EVENT.LEAVE);
+    const after = bodies(paused).length;
+    late(handler, "멈춘 뒤");
+    await paused.flush();
+    await paused.event(EVENT.ENTER);
+    assert.ok(
+      bodies(paused)
+        .slice(after)
+        .every((body) => !body.includes("미확정")),
+      "no unconfirmed text after cancel",
+    );
+    assert.match(bodies(paused).at(-1), /음성 입력을 멈췄습니다/, "resume says the capture stopped");
+    assert.equal(paused.posts.length, 0);
+  } finally {
+    paused.restore();
+  }
+  const recue = await boot({ storage: ready });
+  try {
+    await recue.frame();
+    const detector = recue.detectors.at(-1);
+    detector.event({ type: "wake" });
+    await recue.flush();
+    detector.event({ type: "audio", pcm: new Uint8Array(640) });
+    await recue.flush();
+    const first = recue.sockets.at(-1);
+    const handler = first.onmessage;
+    partial(first, ["첫 신호"]);
+    await recue.flush();
+    detector.event({ type: "wake" });
+    await recue.flush();
+    assert.equal(bodies(recue).at(-1), "Hey dots 감지됨 · 질문을 말하세요.", "a new cue starts from its instruction");
+    late(handler, "첫 신호 늦게");
+    await recue.flush();
+    assert.equal(bodies(recue).at(-1), "Hey dots 감지됨 · 질문을 말하세요.", "the withdrawn session cannot write");
+  } finally {
+    recue.restore();
+  }
+  const off = await boot({ storage: ready });
+  try {
+    await off.frame();
+    const detector = off.detectors.at(-1);
+    detector.event({ type: "wake" });
+    await off.flush();
+    detector.event({ type: "audio", pcm: new Uint8Array(640) });
+    await off.flush();
+    const socket = off.sockets.at(-1);
+    const handler = socket.onmessage;
+    partial(socket, ["취소될 말"]);
+    await off.flush();
+    assert.equal(bodies(off).at(-1), `${LIVE}\n취소될 말`);
+    off.get("wake-enabled").checked = false;
+    off.get("wake-enabled").onchange();
+    await off.flush();
+    assert.equal(socket.closed, true);
+    assert.match(bodies(off).at(-1), /^음성 입력을 멈췄습니다/, "a cancelled capture drops its unconfirmed text");
+    const stopped = bodies(off).length;
+    late(handler, "취소된 뒤");
+    await off.flush();
+    assert.equal(bodies(off).length, stopped);
+    assert.equal(off.posts.length, 0);
+  } finally {
+    off.restore();
+  }
+  const exited = await boot({ storage: ready });
+  try {
+    await exited.event(EVENT.LONG_PRESS, "textEvent");
+    await exited.frame();
+    const handler = exited.sockets.at(-1).onmessage;
+    await exited.event(EVENT.SYSTEM_EXIT);
+    const writes = exited.writes.length;
+    late(handler, "종료 뒤");
+    await exited.flush();
+    assert.equal(exited.writes.length, writes, "nothing is written after a host exit");
+  } finally {
+    exited.restore();
+  }
+});
+
+test("long Korean running text is shown whole up to the update limit, then keeps its newest part", async () => {
+  const h = await boot({ storage: ready });
+  try {
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    const whole = "가나다라 ".repeat(395);
+    partial(socket, [whole]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n${whole.trim()}`, "1,974 units stay whole: no pagination");
+    const over = "앞".repeat(1500) + "😀".repeat(600) + "끝";
+    partial(socket, [over]);
+    await h.flush();
+    const body = bodies(h).at(-1);
+    assert.ok(body.length <= 2000, "within the SDK's 2,000-unit update limit");
+    assert.ok(body.startsWith(`${LIVE}\n…`));
+    assert.ok(body.endsWith("😀끝"));
+    assert.equal(body.isWellFormed(), true);
+    const update = h.writes.findLast((w) => w.containerID === 1);
+    assert.equal(update.contentLength, update.content.length);
+  } finally {
+    h.restore();
+  }
+});
+
+/** A Hey dots capture with running text on G2; returns the detector and its Soniox socket. */
+async function wakeCapture(h, text = "오늘 날씨") {
+  await h.frame();
+  const detector = h.detectors.at(-1);
+  detector.event({ type: "wake" });
+  await h.flush();
+  detector.event({ type: "audio", pcm: new Uint8Array(640) });
+  await h.flush();
+  const socket = h.sockets.at(-1);
+  partial(socket, [text]);
+  await h.flush();
+  assert.equal(bodies(h).at(-1), `${LIVE}\n${text}`);
+  return { detector, socket };
+}
+const headers = (h) => h.writes.filter((w) => w.containerID === 2).map((w) => w.content);
+const turnOffWake = async (h) => {
+  h.get("wake-enabled").checked = false;
+  h.get("wake-enabled").onchange();
+  await h.flush();
+};
+
+test("a single reply deferred behind Hey dots running text comes back when Hey dots is turned off", async () => {
+  const messages = [];
+  const h = await boot({ storage: ready, messages });
+  try {
+    const { socket } = await wakeCapture(h);
+    messages.push({ message_id: "only", text: "하나뿐인 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨`, "the reply waits behind the running text");
+    assert.equal(h.get("prev-message").disabled, true);
+    assert.equal(h.get("next-message").disabled, true, "with one reply neither message button can reach it");
+    // A G2 boundary gesture has no adjacent message to move to either.
+    h.onHostEvent({ textEvent: { eventType: EVENT.SCROLL_TOP } });
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨`);
+    const handler = socket.onmessage;
+    await turnOffWake(h);
+    assert.equal(socket.closed, true);
+    assert.equal(bodies(h).at(-1), "하나뿐인 답변", "the deferred reply takes the body instead of the instruction");
+    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.match(h.get("status").textContent, /최신 답변/);
+    const after = bodies(h).length;
+    handler({ data: JSON.stringify({ tokens: [{ text: "늦은 말", is_final: false }] }) });
+    await h.fire(2500);
+    assert.equal(bodies(h).length, after, "late running text and later polls leave the reply alone");
+    assert.equal(h.posts.length, 0);
+  } finally {
+    h.restore();
+  }
+});
+
+test("cancelling a capture with no new reply says it stopped; a cue with nothing heard yet does too", async () => {
+  const h = await boot({
+    storage: ready,
+    messages: [{ message_id: "old", text: "예전 답변", createdAt: "2026-10-24T00:00:00Z" }],
+  });
+  try {
+    await h.flush();
+    await wakeCapture(h);
+    await turnOffWake(h);
+    assert.match(bodies(h).at(-1), /^음성 입력을 멈췄습니다/, "neither the stale instruction nor the running text");
+    assert.ok(!bodies(h).at(-1).includes("미확정"));
+  } finally {
+    h.restore();
+  }
+  const quiet = await boot({ storage: ready });
+  try {
+    await quiet.frame();
+    quiet.detectors.at(-1).event({ type: "wake" });
+    await quiet.flush();
+    assert.equal(bodies(quiet).at(-1), "Hey dots 감지됨 · 질문을 말하세요.");
+    await turnOffWake(quiet);
+    assert.match(bodies(quiet).at(-1), /^음성 입력을 멈췄습니다/, "the cue instruction does not outlive Hey dots");
+  } finally {
+    quiet.restore();
+  }
+});
+
+test("a deferred reply does not take back a message the user moved to, and survives a late acknowledgement", async () => {
+  const messages = [{ message_id: "a", text: "첫 답변", createdAt: "2026-10-24T00:00:00Z" }];
+  const moved = await boot({ storage: ready, messages });
+  try {
+    await moved.flush();
+    await wakeCapture(moved);
+    messages.push({ message_id: "b", text: "새 답변", createdAt: "2026-10-24T00:00:01Z" });
+    await moved.fire(2500);
+    moved.get("prev-message").onclick();
+    await moved.flush();
+    assert.equal(bodies(moved).at(-1), "첫 답변", "the user chose an earlier message");
+    const after = bodies(moved).length;
+    await turnOffWake(moved);
+    assert.equal(bodies(moved).length, after, "cancelling leaves the chosen message in place");
+  } finally {
+    moved.restore();
+  }
+  const held = [];
+  let hold = false;
+  const replies = [];
+  const late = await boot({
+    storage: ready,
+    messages: replies,
+    write: (update) => (hold && update.containerID === 1 ? new Promise((resolve) => held.push(resolve)) : true),
+  });
+  try {
+    const { socket } = await wakeCapture(late);
+    hold = true;
+    partial(socket, ["오늘 날씨 어때"]);
+    await late.flush();
+    assert.equal(held.length, 1, "a running-text write is unacknowledged");
+    replies.push({ message_id: "r", text: "늦게 온 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await late.fire(2500);
+    await turnOffWake(late);
+    hold = false;
+    held.shift()(true);
+    await late.flush();
+    assert.equal(bodies(late).at(-1), "늦게 온 답변", "the reply follows the late acknowledgement");
+    assert.equal(bodies(late).filter((body) => body === "늦게 온 답변").length, 1);
+  } finally {
+    late.restore();
+  }
+  const finishing = [];
+  const off = await boot({ storage: ready, messages: finishing });
+  try {
+    const { detector } = await wakeCapture(off);
+    finishing.push({ message_id: "f", text: "마무리 중 온 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await off.fire(2500);
+    detector.event({ type: "clip", wav: new Uint8Array(684), seconds: 1 });
+    await off.flush();
+    assert.equal(bodies(off).at(-1), `${FINISHING}\n오늘 날씨`);
+    await turnOffWake(off);
+    assert.equal(bodies(off).at(-1), "마무리 중 온 답변", "turning Hey dots off while finishing also restores it");
+    assert.match(off.get("status").textContent, /취소/, "the phone still says the transcription was cancelled");
+    assert.equal(off.posts.length, 0);
+  } finally {
+    off.restore();
+  }
+});
+
+test("reply polls during a slow running-text acknowledgement keep the display status quiet; failures still show", async () => {
+  const held = [];
+  let hold = false;
+  let fail = false;
+  const h = await boot({
+    storage: ready,
+    write: (update) => (update.containerID !== 1 ? true : hold ? new Promise((resolve) => held.push(resolve)) : !fail),
+  });
+  try {
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    partial(socket, ["내일"]);
+    await h.flush();
+    const said = announcements(h);
+    hold = true;
+    partial(socket, ["내일 일정"]);
+    await h.flush();
+    assert.equal(held.length, 1);
+    const polls = h.polls;
+    for (let i = 0; i < 4; i++) await h.fire(2500);
+    assert.equal(h.polls, polls + 4, "polling continues during the hold");
+    assert.deepEqual(said, [], "no status chatter while the acknowledgement is pending");
+    hold = false;
+    while (held.length) {
+      held.shift()(true);
+      await h.flush();
+    }
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`);
+    assert.deepEqual(said, [], "the acknowledged running text keeps the status it already had");
+    assert.equal(h.get("display").textContent, "G2에 실시간 인식(미확정) 표시 중");
+    fail = true;
+    partial(socket, ["내일 일정 알려줘"]);
+    await h.flush();
+    assert.match(said.at(-1), /표시 갱신 실패/, "a failed running-text write is still reported");
+    await h.fire(2500);
+    assert.ok(!said.includes("G2 표시 요청 중"), "the poll retry stays quiet too");
+    assert.match(said.at(-1), /표시 갱신 실패/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("an automatic submission whose response is lost or times out says storage is unconfirmed, never not sent, and is not replayed", async () => {
+  for (const lost of ["network", "timeout"]) {
+    const h = await boot({
+      storage: ready,
+      fetch: (_url, init) => {
+        if (init?.method !== "POST")
+          return Promise.resolve(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+        // The relay may already have stored the utterance; only its response is lost.
+        h.posts.push(init);
+        if (lost === "network") return Promise.reject(new TypeError("Failed to fetch"));
+        return new Promise((_resolve, reject) =>
+          init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+        );
+      },
+    });
+    try {
+      await h.event(EVENT.LONG_PRESS, "textEvent");
+      await h.frame();
+      const socket = h.sockets.at(-1);
+      partial(socket, ["내일 일정"]);
+      await h.flush();
+      await h.event(EVENT.RELEASE, "textEvent");
+      socket.reply({ tokens: [{ text: "내일 일정 알려줘", is_final: true }], finished: true });
+      await h.flush();
+      if (lost === "timeout") await h.fire(45000);
+      assert.equal(h.posts.length, 1, `${lost}: one submission`);
+      const body = bodies(h).at(-1);
+      assert.ok(!body.includes("전송하지 않았습니다"), `${lost}: G2 does not claim it was not sent: ${body}`);
+      assert.ok(!body.includes("미확정"), `${lost}: the running text does not stay`);
+      assert.match(body, /저장 여부는 확인되지 않았습니다/, `${lost}: G2 says storage is unconfirmed`);
+      assert.match(h.get("status").textContent, /저장 여부는 확인되지 않았습니다/, `${lost}: so does the phone`);
+      assert.equal(h.get("text").value, "내일 일정 알려줘", `${lost}: the transcript stays for an explicit resend`);
+      for (let i = 0; i < 3; i++) await h.fire(2500);
+      assert.equal(h.posts.length, 1, `${lost}: nothing is replayed automatically`);
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("with auto-send off, a single reply deferred during a capture reaches G2 on release while the phone keeps the draft", async () => {
+  const messages = [];
+  const h = await boot({ storage: { ...ready, [PREFS]: JSON.stringify({ wake: false, autoSend: false }) }, messages });
+  try {
+    await h.flush();
+    assert.equal(h.get("auto-send").checked, false);
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    partial(socket, ["내일 일정"]);
+    await h.flush();
+    messages.push({ message_id: "only", text: "하나뿐인 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`, "the reply waits behind the running text");
+    await h.event(EVENT.RELEASE, "textEvent");
+    socket.reply({ tokens: [{ text: "내일 일정 알려줘", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(h.posts.length, 0, "review mode does not submit");
+    assert.equal(bodies(h).at(-1), "하나뿐인 답변", "the deferred reply takes the body on release");
+    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.equal(h.get("text").value, "내일 일정 알려줘", "the transcript waits in the field");
+    assert.match(h.get("status").textContent, /확인한 뒤 전송하세요/, "the phone keeps the review prompt");
+    for (let i = 0; i < 2; i++) await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "하나뿐인 답변", "later polls leave the reply in place");
+    assert.equal(h.posts.length, 0);
+    // The explicit Send then behaves as any typed send while the reply is read.
+    h.get("send").onclick();
+    await h.flush();
+    assert.equal(h.posts.length, 1, "one submission on Send");
+    assert.equal(JSON.parse(h.posts[0].body).text, "내일 일정 알려줘");
+    assert.match(bodies(h).at(-1), /^서버에 저장됨/);
+    messages.push({ message_id: "next", text: "새 답변", createdAt: "2026-10-24T00:00:01Z" });
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "새 답변", "the answer to the submission replaces its notice");
+    assert.equal(h.posts.length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+// Merged paths: running text on G2 combined with owner deletion, retention expiry and the revision fence. A deletion
+// or expiry changes the history revision but brings no reply, so it must never stand in for a deferred reply.
+
+/** A manual hold with running text on G2; returns its Soniox socket. */
+async function manualCapture(h, text = "내일 일정") {
+  await h.event(EVENT.LONG_PRESS, "textEvent");
+  await h.frame();
+  const socket = h.sockets.at(-1);
+  partial(socket, [text]);
+  await h.flush();
+  assert.equal(bodies(h).at(-1), `${LIVE}\n${text}`);
+  return socket;
+}
+async function release(h, socket, text = "내일 일정 알려줘") {
+  await h.event(EVENT.RELEASE, "textEvent");
+  socket.reply({ tokens: [{ text, is_final: true }], finished: true });
+  await h.flush();
+}
+/** `relay()` that also reports the retention cutoff `cutoff()` returns on every poll. */
+function retained(server, cutoff) {
+  const inner = relay(server);
+  return async (url, init) => {
+    const response = await inner(url, init);
+    if (init?.method === "POST") return response;
+    return Response.json({ ...(await response.json()), retention_cutoff: cutoff() });
+  };
+}
+const day = (d) => `2026-10-${String(d).padStart(2, "0")}T00:00:00.000Z`;
+const msg2 = (id, text, createdAt) => ({ message_id: id, text, createdAt });
+const STOPPED = /전송하지 않았습니다/;
+
+test("an owner deletion during running text keeps the caption, and the submission is shown as sent, not stopped", async () => {
+  const server = { revision: 1, messages: [msg("old", "삭제될 답변")] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    const socket = await manualCapture(h);
+    const audio = h.audio.length;
+    server.revision = 2;
+    server.messages = [];
+    await h.fire(2500);
+    assert.match(h.get("reply").textContent, /대화 기록이 삭제/, "the phone drops the old reply");
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`, "the running text is current work and stays on G2");
+    assert.equal(h.audio.length, audio, "the microphone is left alone");
+    partial(socket, ["내일 일정 알려"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정 알려`, "new running text still reaches G2 after the deletion");
+    await release(h, socket);
+    assert.equal(server.posts.length, 1);
+    const body = bodies(h).at(-1);
+    assert.match(body, /^서버에 저장됨/, `the deletion is not a reply, so the submission notice shows: ${body}`);
+    assert.doesNotMatch(body, STOPPED);
+    assert.ok(
+      !bodies(h)
+        .slice(-3)
+        .some((b) => b.includes("삭제될 답변")),
+      "the deleted reply never returns",
+    );
+    // A reply written after the deletion replaces the notice as usual.
+    server.messages = [msg("new", "삭제 후 새 답변")];
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "삭제 후 새 답변");
+    assert.equal(server.posts.length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a reply written after a deletion during running text is deferred on G2 and shown on submission", async () => {
+  const server = { revision: 1, messages: [msg("old", "삭제될 답변")] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    const socket = await manualCapture(h);
+    server.revision = 2;
+    server.messages = [msg("new", "삭제 후 새 답변")];
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "삭제 후 새 답변", "the phone shows the new reply");
+    assert.match(h.get("status").textContent, /대화 기록이 삭제/, "the deletion is still announced");
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`, "G2 keeps the running text");
+    await release(h, socket);
+    assert.equal(server.posts.length, 1);
+    assert.equal(bodies(h).at(-1), "삭제 후 새 답변", "the deferred reply comes back on submission");
+    assert.match(headers(h).at(-1), /^답변 1\/1/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("expiry during running text is not a reply: submission, review and cancel never bring back an old reply", async () => {
+  const start = () => ({
+    revision: 1,
+    messages: [msg2("m-2", "먼저 만료될 답변", day(2)), msg2("m-5", "남을 답변", day(5))],
+  });
+  // Auto-send on: the submission notice, not the old reply, follows the POST.
+  {
+    const server = start();
+    let cutoff = day(1);
+    const h = await boot({ storage: ready, fetch: retained(server, () => cutoff) });
+    try {
+      assert.equal(h.get("reply").textContent, "남을 답변");
+      const socket = await manualCapture(h);
+      cutoff = day(3);
+      server.messages = server.messages.slice(1);
+      await h.fire(2500);
+      assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`, "the running text stays");
+      assert.equal(h.get("reply").textContent, "남을 답변", "the phone keeps the reply still kept");
+      await release(h, socket);
+      assert.equal(server.posts.length, 1);
+      assert.match(bodies(h).at(-1), /^서버에 저장됨/, "expiry does not stand in for an answer");
+      assert.doesNotMatch(h.get("status").textContent, /답변 수신/, "no reply is claimed");
+    } finally {
+      h.restore();
+    }
+  }
+  // Auto-send off: G2 keeps the review prompt; nothing is submitted.
+  {
+    const server = start();
+    let cutoff = day(1);
+    const h = await boot({
+      storage: { ...ready, [PREFS]: JSON.stringify({ wake: false, autoSend: false }) },
+      fetch: retained(server, () => cutoff),
+    });
+    try {
+      await h.flush();
+      const socket = await manualCapture(h);
+      cutoff = day(3);
+      server.messages = server.messages.slice(1);
+      await h.fire(2500);
+      await release(h, socket);
+      assert.equal(server.posts.length, 0);
+      assert.equal(bodies(h).at(-1), "전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
+      assert.equal(h.get("text").value, "내일 일정 알려줘");
+    } finally {
+      h.restore();
+    }
+  }
+  // Hey dots turned off mid-capture: G2 says it stopped.
+  {
+    const server = start();
+    let cutoff = day(1);
+    const h = await boot({ storage: ready, fetch: retained(server, () => cutoff) });
+    try {
+      await wakeCapture(h);
+      cutoff = day(3);
+      server.messages = server.messages.slice(1);
+      await h.fire(2500);
+      await turnOffWake(h);
+      assert.match(bodies(h).at(-1), /^음성 입력을 멈췄습니다/);
+      assert.equal(server.posts.length, 0);
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("after a known revision, a legacy or malformed response during running text defers nothing to G2", async () => {
+  for (const bad of [undefined, "2", -1, 1.5]) {
+    const server = { revision: 1, messages: [msg("old", "알던 답변")] };
+    const h = await boot({ storage: ready, fetch: relay(server) });
+    try {
+      const socket = await manualCapture(h);
+      server.revision = bad;
+      server.messages = [msg("old", "알던 답변"), msg("x", "검증되지 않은 답변")];
+      await h.fire(2500);
+      assert.match(h.get("status").textContent, /표시하지 않았습니다/, `${bad}: the response is dropped whole`);
+      assert.equal(h.get("reply").textContent, "알던 답변", `${bad}: the phone does not show it`);
+      assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`, `${bad}: G2 keeps the running text`);
+      await release(h, socket);
+      assert.match(bodies(h).at(-1), /^서버에 저장됨/, `${bad}: no unverified reply is deferred to G2`);
+      assert.ok(!bodies(h).includes("검증되지 않은 답변"));
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("an automatic POST answered after a deletion neither says not sent nor leaves running text on G2", async () => {
+  let settle;
+  const server = {
+    revision: 1,
+    messages: [msg("old", "삭제될 답변")],
+    post: () => new Promise((resolve) => (settle = resolve)),
+  };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    const socket = await manualCapture(h);
+    await release(h, socket);
+    assert.equal(server.posts.length, 1);
+    server.revision = 2;
+    server.messages = [];
+    await h.fire(2500);
+    settle(Response.json({ status: "accepted" }));
+    await h.flush();
+    const body = bodies(h).at(-1);
+    assert.doesNotMatch(body, STOPPED, `the relay accepted it: ${body}`);
+    assert.ok(!body.includes("미확정"), "the running text does not stay");
+    assert.ok(!body.includes("삭제될 답변"), "the deleted reply does not return");
+    assert.match(body, /지워졌을 수 있습니다/, "G2 says the accepted question may have gone with the deletion");
+    assert.match(h.get("status").textContent, /지워졌을 수 있습니다/);
+    assert.equal(h.get("text").value, "");
+    await h.fire(2500);
+    assert.equal(server.posts.length, 1, "nothing is resent");
+  } finally {
+    h.restore();
+  }
+});
+
+test("an automatic POST refused with 410 says so on G2, keeps the transcript and resends with a new ID", async () => {
+  const server = {
+    revision: 1,
+    messages: [],
+    post: () => Promise.resolve(Response.json({ error: "Utterance was deleted" }, { status: 410 })),
+  };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    const socket = await manualCapture(h);
+    await release(h, socket);
+    assert.equal(server.posts.length, 1);
+    assert.match(bodies(h).at(-1), /서버가 이 질문을 받지 않았습니다/);
+    assert.doesNotMatch(bodies(h).at(-1), STOPPED);
+    assert.equal(h.get("text").value, "내일 일정 알려줘");
+    await h.fire(2500);
+    assert.equal(server.posts.length, 1, "no automatic replay");
+    server.post = () => Promise.resolve(Response.json({ status: "stored" }));
+    h.get("send").onclick();
+    await h.flush();
+    assert.equal(server.posts.length, 2);
+    assert.notEqual(server.posts[1].id, server.posts[0].id, "the resend uses a new ID");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a deferred reply survives review mode, cancel and an unknown outcome, but not its own deletion", async () => {
+  const off = { ...ready, [PREFS]: JSON.stringify({ wake: false, autoSend: false }) };
+  // Review mode: the reply deferred during capture takes G2; a deletion afterwards clears it and Send shows as sent.
+  {
+    const server = { revision: 1, messages: [] };
+    const h = await boot({ storage: off, fetch: relay(server) });
+    try {
+      await h.flush();
+      const socket = await manualCapture(h);
+      server.messages = [msg("only", "하나뿐인 답변")];
+      await h.fire(2500);
+      await release(h, socket);
+      assert.equal(bodies(h).at(-1), "하나뿐인 답변");
+      server.revision = 2;
+      server.messages = [];
+      await h.fire(2500);
+      assert.match(bodies(h).at(-1), /대화 기록이 삭제/);
+      h.get("send").onclick();
+      await h.flush();
+      assert.equal(server.posts.length, 1);
+      assert.match(bodies(h).at(-1), /^서버에 저장됨/);
+    } finally {
+      h.restore();
+    }
+  }
+  // Review mode: a deferred reply deleted before release does not come back; G2 shows the review prompt.
+  {
+    const server = { revision: 1, messages: [] };
+    const h = await boot({ storage: off, fetch: relay(server) });
+    try {
+      await h.flush();
+      const socket = await manualCapture(h);
+      server.messages = [msg("gone", "곧 삭제될 답변")];
+      await h.fire(2500);
+      server.revision = 2;
+      server.messages = [];
+      await h.fire(2500);
+      assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`);
+      await release(h, socket);
+      assert.equal(bodies(h).at(-1), "전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
+      assert.equal(server.posts.length, 0);
+    } finally {
+      h.restore();
+    }
+  }
+  // Cancel: a deferred reply deleted before Hey dots is turned off leaves "stopped", not an empty or old body.
+  {
+    const server = { revision: 1, messages: [] };
+    const h = await boot({ storage: ready, fetch: relay(server) });
+    try {
+      await wakeCapture(h);
+      server.messages = [msg("gone", "곧 삭제될 답변")];
+      await h.fire(2500);
+      server.revision = 2;
+      server.messages = [];
+      await h.fire(2500);
+      await turnOffWake(h);
+      assert.match(bodies(h).at(-1), /^음성 입력을 멈췄습니다/);
+    } finally {
+      h.restore();
+    }
+  }
+  // Unknown outcome: the deferred reply takes G2, the phone keeps the unconfirmed-storage status, no replay.
+  {
+    const server = { revision: 1, messages: [], post: () => Promise.reject(new TypeError("Failed to fetch")) };
+    const h = await boot({ storage: ready, fetch: relay(server) });
+    try {
+      const socket = await manualCapture(h);
+      server.messages = [msg("only", "하나뿐인 답변")];
+      await h.fire(2500);
+      await release(h, socket);
+      assert.equal(server.posts.length, 1);
+      assert.equal(bodies(h).at(-1), "하나뿐인 답변");
+      assert.match(h.get("status").textContent, /저장 여부는 확인되지 않았습니다/);
+      assert.equal(h.get("text").value, "내일 일정 알려줘");
+      for (let i = 0; i < 2; i++) await h.fire(2500);
+      assert.equal(server.posts.length, 1);
+    } finally {
+      h.restore();
+    }
+  }
+});

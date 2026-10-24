@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#f3f5f7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#14181b" media="(prefers-color-scheme: dark)" />
-    <title>G2 · Dot Cloud</title>
+    <title>Lens MCP for G2</title>
   </head>
   <body>
     <main>
       <header class="intro">
-        <h1>G2 · Dot Cloud</h1>
+        <h1>Lens MCP for G2</h1>
         <p class="lede">Mac 없이 음성을 Dot으로 보내고, 답변을 안경에서 확인합니다.</p>
         <p id="status" role="status" aria-live="polite">Even Hub 연결 확인 중</p>
       </header>
@@ -93,13 +93,15 @@
         >
         <label class="check"
           ><input id="wake-enabled" type="checkbox" checked aria-describedby="wake-status wake-hint" />Hey dots 로컬
-          음성 호출 (기본 켜짐 · 앱이 열려 있는 동안 G2 마이크 사용)</label
+          음성 호출 (기본 켜짐 · G2에서 앱이 열려 있는 동안 G2 마이크 사용)</label
         >
         <p id="wake-status" class="field-status check-hint" role="status" aria-live="polite">Hey dots 준비 확인 중</p>
         <p id="wake-hint" class="hint check-hint">
           G2 준비, 서버 연결, Soniox 키가 모두 있을 때만 G2 마이크를 열고, 호출어는 이 휴대폰에서 로컬로 감지합니다.
-          앱이 열려 있을 때만 동작합니다. 영어 발음 Hey dots 뒤에 질문을 말하면, 호출 뒤 질문만 Soniox로 전사하고 그
-          텍스트를 서버로 전송합니다. 한국어식 발음 인식 정확도는 확인되지 않았습니다. 끄면 즉시 듣기를 멈춥니다.
+          G2에서 앱이 열려 있는 동안 동작하며, 휴대폰 화면이 꺼지거나 잠겨도 이 앱은 듣기와 답변 확인을 계속합니다.
+          잠금 중 동작은 Even 앱과 휴대폰의 백그라운드 실행 제한에 영향을 받을 수 있습니다. 휴대폰 마이크는 쓰지
+          않습니다. 영어 발음 Hey dots 뒤에 질문을 말하면, 호출 뒤 질문만 Soniox로 전사하고 그 텍스트를 서버로
+          전송합니다. 한국어식 발음 인식 정확도는 확인되지 않았습니다. 끄면 즉시 듣기를 멈춥니다.
         </p>
         <div class="compose">
           <p id="record-hint" class="hint" hidden></p>

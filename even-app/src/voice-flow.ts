@@ -65,7 +65,7 @@ export type RequestFailure = "timeout" | "cancelled" | "network";
 export function requestFailure(kind: RequestFailure, submission: boolean): string {
   const cause = {
     timeout: "서버가 45초 안에 응답하지 않아 요청을 취소했습니다. 네트워크를 확인하세요.",
-    cancelled: "앱이 화면에서 벗어나 서버 요청을 취소했습니다.",
+    cancelled: "안경에서 앱이 닫히거나 전환되어 서버 요청을 취소했습니다.",
     network: "서버에 연결하지 못했습니다. 네트워크 연결을 확인하세요.",
   }[kind];
   return submission ? `${cause} 서버 저장 여부는 확인되지 않았습니다.` : cause;

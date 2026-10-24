@@ -9,6 +9,8 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { boundaryStep, pairCode, relayOrigin, segmentContent, segments } from "./protocol.ts";
 import { G2Text } from "./g2-display.ts";
+import { ExitRequest, edgeNote, idleBody } from "./g2-guide.ts";
+import { g2LifecycleStep, gesture } from "./g2-lifecycle.ts";
 import "./style.css";
 import { completeVoice, draftFor, requestFailure, transcriptField, utteranceBody, type Draft } from "./voice-flow.ts";
 import { SonioxTranscriptionError, openSonioxStream, sttMessage, type SonioxStream } from "./soniox-transcriber.ts";
@@ -23,7 +25,11 @@ const status = (text: string) => {
 const storageKey = "dot-cloud-device-v1";
 let bridge: EvenAppBridge | undefined;
 let ready = false;
-let active = !document.hidden;
+// False between a pagehide that unloads the page and any later pageshow; the page is not running then.
+let pageLoaded = true;
+// The G2 page is in the glasses foreground. Phone page visibility is deliberately not tracked: a locked phone or a
+// backgrounded Even app keeps Hey dots, manual capture and reply polling running.
+let active = true;
 let exited = false;
 let generation = 0;
 let credentials: { origin: string; token: string } | undefined;
@@ -44,12 +50,18 @@ let selection = "notice:0";
 let notices = 0;
 // A submission notice that the next reply makes obsolete, even when that reply lands behind the message being read.
 let replyNotice: string | undefined;
+// A one-off header note (a navigation edge, a failed exit request) holds only while the G2 view it answered is unchanged.
+let headerNote: { text: string; view: string } | undefined;
+// A notice that says a capture is in progress; a pause discards the capture, so the notice must not come back with the page.
+let captureNotice: string | undefined;
+const view = () => `${selection}#${part}@${history.revision}`;
 const g2 = new G2Text((containerID, containerName, content) =>
   bridge!.textContainerUpgrade(
     new TextContainerUpgrade({ containerID, containerName, contentOffset: 0, contentLength: content.length, content }),
   ),
 );
 const history = new MessageHistory();
+const exit = new ExitRequest(() => bridge!.shutDownPageContainer(1));
 let recording = false;
 let recordingWanted = false;
 let micQueue = Promise.resolve();
@@ -180,7 +192,7 @@ function syncWake(): void {
             discardVoice(wakeVoice);
             wakeVoice = openVoice(version, true);
             wakeNotice("Hey dots 감지됨 · 이제 질문을 말하세요.");
-            displayText("Hey dots 감지됨 · 질문을 말하세요.");
+            captureText("Hey dots 감지됨 · 질문을 말하세요.");
           } else {
             const voice = wakeVoice;
             wakeVoice = undefined;
@@ -339,6 +351,11 @@ function cancelRequests(): void {
 function renderDisplay(): void {
   const version = ++displayVersion;
   const connectionVersion = generation;
+  // Until the first reply or notice, the body names the next setup step.
+  if (selection === "notice:0") {
+    parts = [idleBody({ restored, connected: !!credentials, transcriber: !!sonioxKey.value })];
+    part = 0;
+  }
   const content = segmentContent(parts, part);
   const key = `${selection}#${part}`;
   // Phone part buttons only exist for a reply too long for one G2 update.
@@ -361,10 +378,10 @@ function renderDisplay(): void {
     .then(async () => {
       if (!ready || !bridge || !active || !current(connectionVersion) || version !== displayVersion) return;
       // Status goes to the header only; an unchanged body is not rewritten, so its native scroll position stays.
-      const headerOk = await g2.show(2, "microphone", g2Header());
-      if (!current(connectionVersion) || version !== displayVersion) return;
       // The whole reply goes to the event-capturing container, which scrolls it natively on G2.
       const ok = await g2.show(1, "reply", content, key);
+      if (!current(connectionVersion) || version !== displayVersion) return;
+      const headerOk = await g2.show(2, "microphone", g2Header());
       if (!current(connectionVersion) || version !== displayVersion) return;
       displayStatus(
         ok && headerOk ? "G2가 표시 갱신을 확인했습니다." : "G2 표시 갱신 실패 · 휴대폰에서 답변을 확인하세요.",
@@ -382,7 +399,8 @@ function displayStatus(text: string): void {
 function g2Header(): string {
   const position =
     selection.startsWith("reply:") && history.index >= 0 ? `답변 ${history.index + 1}/${history.messages.length}` : "";
-  return Array.from([position, wakeLabel].filter(Boolean).join(" · ")).slice(0, 70).join("");
+  const note = headerNote?.view === view() ? headerNote.text : "";
+  return Array.from([position, note, wakeLabel].filter(Boolean).join(" · ")).slice(0, 70).join("");
 }
 function showSelectedReply(): void {
   const reply = history.selected;
@@ -400,6 +418,10 @@ function displayText(text: string): void {
   part = 0;
   selection = `notice:${++notices}`;
   renderDisplay();
+}
+function captureText(text: string): void {
+  displayText(text);
+  captureNotice = selection;
 }
 /** A reply arrived behind the reader while G2 waited for it: the message being read comes back in place of the notice. */
 function restoreReader(): void {
@@ -420,10 +442,34 @@ function turn(delta: number): void {
   if ("part" in step) {
     part = step.part;
     renderDisplay();
-  } else moveMessage(step.message);
+  } else if (history.move(step.message)) showSelectedReply();
+  else {
+    // Only the header says why nothing moved, so the body and its native scroll position stay.
+    headerNote = { text: edgeNote(history.messages.length, step.message), view: view() };
+    renderDisplay();
+  }
+}
+const EXIT_FAILED = "종료 요청 실패 · 다시 두 번 탭하세요";
+/** A root-page double tap asks the host to confirm the exit; the session continues until the host reports it. */
+function requestExit(): void {
+  if (exited) return;
+  void exit.request().then((ok) => {
+    if (ok === undefined || exited) return;
+    if (ok) {
+      // The host shows its confirmation; an earlier failure note no longer holds.
+      if (headerNote?.text !== EXIT_FAILED) return;
+      headerNote = undefined;
+    } else {
+      status("G2 종료 요청을 보내지 못했습니다. 다시 두 번 탭하거나 Even 앱에서 종료하세요.");
+      headerNote = { text: EXIT_FAILED, view: view() };
+    }
+    if (active) renderDisplay();
+  });
 }
 async function poll(): Promise<void> {
   if (pollRunning || !active || exited || !credentials) return;
+  // A poll started early replaces the scheduled one, so every caller keeps a single 2.5-second chain.
+  clearTimeout(pollTimer);
   const version = generation;
   pollRunning = true;
   try {
@@ -437,7 +483,11 @@ async function poll(): Promise<void> {
       showSelectedReply();
     } else if (history.revision !== revision && selection === replyNotice) restoreReader();
     // New replies behind the reader only change the header position; the body keeps its scroll.
-    else if (history.revision !== revision) renderDisplay();
+    else if (
+      history.revision !== revision ||
+      (ready && (!g2.has(2, g2Header()) || !g2.has(1, segmentContent(parts, part), `${selection}#${part}`)))
+    )
+      renderDisplay();
   } catch (e) {
     if (current(version) && active) report(e);
   } finally {
@@ -499,7 +549,7 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
   const { version, id } = voice;
   if (!current(version) || !active) return discardVoice(voice);
   status("음성 전사 마무리 중 · Soniox 최종 결과 대기");
-  displayText("음성 전사 마무리 중 · 아직 전송 전");
+  captureText("음성 전사 마무리 중 · 아직 전송 전");
   let kept = false;
   try {
     await completeVoice({
@@ -586,7 +636,7 @@ function startRecording(): void {
       wakeNotice("마이크 켜짐 · 수동 녹음 중");
       if (!current(version) || !recordingWanted || !active) return;
       status("녹음 중 · Soniox 실시간 전사 중 · 중지하면 최종 결과를 전송합니다.");
-      displayText("녹음 중 · 손을 떼면 전사 후 전송합니다.");
+      captureText("녹음 중 · 손을 떼면 전사 후 전송합니다.");
       recordingTimer = setTimeout(() => stopRecording(false), 30000);
     } finally {
       // A manual capture that never opened the microphone hands it back to Hey dots.
@@ -876,6 +926,7 @@ el("disconnect").onclick = () => {
     )
     .catch(report);
 };
+/** The G2 page left the glasses foreground or the host is exiting it: listening, capture and polling stop. */
 function pause(): void {
   active = false;
   syncWake();
@@ -886,21 +937,38 @@ function pause(): void {
   controls();
 }
 function resume(): void {
-  if (exited) return;
+  // A repeated FOREGROUND_ENTER, or one after a gesture already resumed, changes nothing: no body rewrite that would
+  // reset native scroll, no second poll, and no wake epoch bump that would drop a queued Hey dots command.
+  // An unloaded page stays paused until pageshow, whatever G2 event arrives.
+  if (exited || active || !pageLoaded) return;
   active = true;
-  // G2 may have dropped the page while hidden, so resend the current text once.
+  // The pause discarded that capture, so the reader comes back instead; a draft in the text field stays as it is.
+  if (selection === captureNotice) {
+    if (history.selected) showSelectedReply();
+    else displayText("G2에서 앱이 전환되어 음성 입력을 멈췄습니다. Hey dots 또는 길게 누르기로 다시 말하세요.");
+  }
+  // G2 may have dropped the page while it was in the background, so resend the current text once.
   g2.forget();
   syncWake();
   controls();
   void poll();
   renderDisplay();
 }
-document.addEventListener("visibilitychange", () => (document.hidden ? pause() : resume()));
-window.addEventListener("pagehide", pause);
-window.addEventListener("pageshow", resume);
+// Phone visibility is not the glasses session lifecycle, so there is no page visibility gate: a locked phone keeps
+// the session running. Only a genuine page unload (pagehide) or a host event pauses it.
+window.addEventListener("pagehide", (event) => {
+  // A page kept in the back-forward cache is frozen, not unloaded, and pageshow brings it back unchanged.
+  if (event.persisted) return;
+  pageLoaded = false;
+  pause();
+});
+window.addEventListener("pageshow", () => {
+  pageLoaded = true;
+  resume();
+});
 // Outside the Even app the bridge never appears; say so instead of waiting silently.
 const bridgeWait = setTimeout(() => {
-  if (!bridge) status("Even 앱을 찾지 못했습니다. Even 앱의 Dot Cloud에서 열어 주세요.");
+  if (!bridge) status("Even 앱을 찾지 못했습니다. Even 앱의 Lens MCP for G2에서 열어 주세요.");
 }, 10000);
 // Fences startup restoration from the start, before any await.
 const startup = generation;
@@ -920,7 +988,7 @@ void (async () => {
           width: 560,
           height: 228,
           isEventCapture: 1,
-          content: "Dot Cloud · 휴대폰에서 서버를 연결하세요.",
+          content: idleBody({ restored, connected: !!credentials, transcriber: !!sonioxKey.value }),
         }),
         new TextContainerProperty({
           containerID: 2,
@@ -936,6 +1004,7 @@ void (async () => {
   );
   if (result !== 0) throw new Error("G2 시작 화면을 만들지 못했습니다. Even 앱에서 다시 여세요.");
   ready = true;
+  active = pageLoaded;
   controls();
   bridge.onEvenHubEvent((event) => {
     if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && wakeMicOpen && wakeAllowed())
@@ -954,12 +1023,26 @@ void (async () => {
       if (bytes >= 960000) stopRecording(false);
     }
     const type = event.sysEvent?.eventType ?? event.textEvent?.eventType ?? event.listEvent?.eventType;
-    if (type === OsEventTypeList.SYSTEM_EXIT_EVENT || type === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
+    const step = g2LifecycleStep(type);
+    if (step === "exit") {
       pause();
       exited = true;
       cancelRequests();
       return;
     }
+    if (step === "leave") {
+      pause();
+      // Said on the phone, so a device run shows whether this host event ever follows a phone lock; it must not.
+      return status("G2에서 앱이 전환되어 듣기, 녹음과 답변 확인을 멈췄습니다. G2에서 다시 열면 이어집니다.");
+    }
+    if (step === "enter") {
+      if (!active && !exited && pageLoaded) status("G2에서 앱으로 돌아와 듣기와 답변 확인을 다시 시작합니다.");
+      return resume();
+    }
+    // The exit confirmation stays reachable even while the page is paused.
+    if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) return requestExit();
+    // Input reaches only the foreground G2 page, so a gesture after a missed FOREGROUND_ENTER_EVENT resumes first.
+    if (!active && !exited && gesture(type)) resume();
     if (!active) return;
     if (type === OsEventTypeList.LONG_PRESS_EVENT) startRecording();
     if (type === OsEventTypeList.LONG_PRESS_RELEASE_EVENT) stopRecording(false);
@@ -998,6 +1081,8 @@ void (async () => {
   // A failed startup still lets the user pair instead of leaving the form disabled.
   restored = true;
   controls();
+  // The idle body stops saying the saved connection is being checked.
+  if (ready) renderDisplay();
   report(e);
 });
 keyNotice();

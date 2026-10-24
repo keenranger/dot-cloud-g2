@@ -9,6 +9,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { boundaryStep, pairCode, relayOrigin, segmentContent, segments } from "./protocol.ts";
 import { G2Text } from "./g2-display.ts";
+import { CAPTION_FINISHING, CAPTION_LIVE, captionBody } from "./g2-caption.ts";
 import { ExitRequest, edgeNote, idleBody } from "./g2-guide.ts";
 import { g2LifecycleStep, gesture } from "./g2-lifecycle.ts";
 import "./style.css";
@@ -55,6 +56,9 @@ let replyNotice: string | undefined;
 let headerNote: { text: string; view: string } | undefined;
 // A notice that says a capture is in progress; a pause discards the capture, so the notice must not come back with the page.
 let captureNotice: string | undefined;
+// The voice whose running text the capture notice shows on G2. It holds the body only while that notice is still
+// selected; a reply arriving meanwhile waits, and the user moving to a message ends it.
+let caption: { voice: LiveVoice; heading: string; label: string; text: string } | undefined;
 const view = () => `${selection}#${part}@${history.revision}`;
 const g2 = new G2Text((containerID, containerName, content) =>
   bridge!.textContainerUpgrade(
@@ -104,6 +108,8 @@ interface LiveVoice {
   id: string;
   version: number;
   keyRevision: number;
+  // History revision when the capture began; a reply received after it is shown once the capture is submitted.
+  revision: number;
 }
 let manualVoice: LiveVoice | undefined;
 let wakeVoice: LiveVoice | undefined;
@@ -256,7 +262,7 @@ function syncWake(retry = false): void {
             discardVoice(wakeVoice);
             wakeVoice = openVoice(version, true);
             wakeNotice("Hey dots 감지됨 · 이제 질문을 말하세요.");
-            captureText("Hey dots 감지됨 · 질문을 말하세요.");
+            captureText("Hey dots 감지됨 · 질문을 말하세요.", wakeVoice);
           } else {
             const voice = wakeVoice;
             wakeVoice = undefined;
@@ -427,7 +433,8 @@ function cancelRequests(): void {
   requests = new Set();
   abortTranscriptions(() => true);
 }
-function renderDisplay(): void {
+/** `quiet` marks a running-text update: the phone display status does not re-announce every partial. */
+function renderDisplay(quiet = false): void {
   const version = ++displayVersion;
   const connectionVersion = generation;
   // Until the first reply or notice, the body names the next setup step.
@@ -452,7 +459,7 @@ function renderDisplay(): void {
   el<HTMLButtonElement>("next").disabled = part === parts.length - 1;
   // A render that writes nothing, such as a keystroke, leaves the display status alone instead of announcing it again.
   if (!ready) displayStatus("G2 연결 전 · 휴대폰에서 읽을 수 있습니다.");
-  else if (!g2.has(2, g2Header()) || !g2.has(1, content, key)) displayStatus("G2 표시 요청 중");
+  else if (!quiet && (!g2.has(2, g2Header()) || !g2.has(1, content, key))) displayStatus("G2 표시 요청 중");
   displayQueue = displayQueue
     .then(async () => {
       if (!ready || !bridge || !active || !current(connectionVersion) || version !== displayVersion) return;
@@ -463,7 +470,11 @@ function renderDisplay(): void {
       const headerOk = await g2.show(2, "microphone", g2Header());
       if (!current(connectionVersion) || version !== displayVersion) return;
       displayStatus(
-        ok && headerOk ? "G2가 표시 갱신을 확인했습니다." : "G2 표시 갱신 실패 · 휴대폰에서 답변을 확인하세요.",
+        !(ok && headerOk)
+          ? "G2 표시 갱신 실패 · 휴대폰에서 답변을 확인하세요."
+          : quiet
+            ? "G2에 실시간 인식(미확정) 표시 중"
+            : "G2가 표시 갱신을 확인했습니다.",
       );
     })
     .catch(() => {
@@ -498,13 +509,43 @@ function displayText(text: string): void {
   selection = `notice:${++notices}`;
   renderDisplay();
 }
-function captureText(text: string): void {
-  displayText(text);
+/** A capture notice; with `voice`, its running text is shown under `label` once Soniox reports any. */
+function captureText(text: string, voice?: LiveVoice, label = CAPTION_LIVE): void {
+  // The same voice moving on to finishing keeps what was already heard, unless the user has left its notice.
+  const heard = voice && caption?.voice === voice && selection === captureNotice ? caption.text : "";
+  displayText(heard ? captionBody(label, heard) : text);
   captureNotice = selection;
+  caption = voice ? { voice, heading: text, label, text: heard } : undefined;
+}
+function captionHolds(): boolean {
+  return !!caption && selection === captureNotice;
+}
+/** Shows a partial on G2 only while its own capture notice is selected; writes are paced by G2 acknowledgements. */
+function showCaption(voice: LiveVoice, text: string): void {
+  if (caption?.voice !== voice || !captionHolds()) return;
+  caption.text = text;
+  parts = segments(text ? captionBody(caption.label, text) : caption.heading);
+  part = 0;
+  renderDisplay(true);
+}
+/** A cancelled or finished voice leaves no unconfirmed text on G2: its notice falls back to the plain instruction. */
+function releaseCaption(voice: LiveVoice | undefined): void {
+  if (!voice || caption?.voice !== voice) return;
+  const { heading, text } = caption;
+  const held = captionHolds();
+  caption = undefined;
+  if (!held || !text) return;
+  parts = segments(heading);
+  part = 0;
+  renderDisplay();
 }
 /** A reply arrived behind the reader while G2 waited for it: the message being read comes back in place of the notice. */
 function restoreReader(): void {
-  status("Dot 답변 수신 · 읽던 메시지로 돌아갑니다. 새 답변은 다음 메시지로 이동해 확인하세요.");
+  status(
+    history.index < history.messages.length - 1
+      ? "Dot 답변 수신 · 읽던 메시지로 돌아갑니다. 새 답변은 다음 메시지로 이동해 확인하세요."
+      : "Dot 답변 수신 · G2에 최신 답변을 표시합니다.",
+  );
   showSelectedReply();
 }
 function moveMessage(delta: number): void {
@@ -557,7 +598,11 @@ async function poll(): Promise<void> {
     const revision = history.revision;
     const changed = history.receive(result.messages);
     controls();
-    if (changed) {
+    if (changed && captionHolds()) {
+      // The phone shows the reply now; G2 keeps the running speech and shows the reply when the capture is submitted.
+      el("reply").textContent = history.selected!.text;
+      status("Dot 답변 수신 · 음성 입력 중이라 G2에는 전송 후 표시합니다.");
+    } else if (changed) {
       status("Dot 답변 수신 · G2 표시를 요청합니다.");
       showSelectedReply();
     } else if (history.revision !== revision && selection === replyNotice) restoreReader();
@@ -605,12 +650,15 @@ function openVoice(version: number, wake: boolean): LiveVoice | undefined {
     id: crypto.randomUUID(),
     version,
     keyRevision: sonioxKey.revision,
+    revision: history.revision,
     stream: openSonioxStream({
       credential: () => key,
       signal: entry.controller.signal,
-      // Phone-only running text; G2, history and submission wait for the final transcript.
+      // Running text is shown, marked unconfirmed; history and submission wait for the final transcript.
       onPartial: (text) => {
-        if (voiceLive(voice)) showPartial(text);
+        if (!voiceLive(voice)) return;
+        showPartial(text);
+        showCaption(voice, text);
       },
     }),
   };
@@ -623,12 +671,15 @@ function discardVoice(voice: LiveVoice | undefined): void {
   voice.entry.controller.abort();
   transcriptions.delete(voice.entry);
   showPartial("");
+  releaseCaption(voice);
 }
 async function finishVoice(voice: LiveVoice): Promise<void> {
   const { version, id } = voice;
   if (!current(version) || !active) return discardVoice(voice);
   status("음성 전사 마무리 중 · Soniox 최종 결과 대기");
-  captureText("음성 전사 마무리 중 · 아직 전송 전");
+  // After the user moved to a message, the finishing notice no longer shows this voice's running text.
+  const owner = caption?.voice === voice && captionHolds() ? voice : undefined;
+  captureText("음성 전사 마무리 중 · 아직 전송 전", owner, CAPTION_FINISHING);
   let kept = false;
   try {
     await completeVoice({
@@ -653,7 +704,7 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
         displayText("전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
         return next.draft;
       },
-      send: (text) => sendText(text, version, id),
+      send: (text) => sendText(text, version, id, voice.revision),
       // A failed automatic send leaves the transcript in the field as review mode would, on the same connection only.
       keep: (text) => {
         if (!current(version)) return;
@@ -676,6 +727,7 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
   } finally {
     transcriptions.delete(voice.entry);
     showPartial("");
+    releaseCaption(voice);
   }
 }
 function startRecording(): void {
@@ -719,7 +771,7 @@ function startRecording(): void {
       if (!current(version) || !recordingWanted || !active) return;
       watchAudio();
       status("녹음 중 · Soniox 실시간 전사 중 · 중지하면 최종 결과를 전송합니다.");
-      captureText("녹음 중 · 손을 떼면 전사 후 전송합니다.");
+      captureText("녹음 중 · 손을 떼면 전사 후 전송합니다.", voice);
       recordingTimer = setTimeout(() => stopRecording(false), 30000);
     } finally {
       // A manual capture that never opened the microphone hands it back to Hey dots.
@@ -810,9 +862,9 @@ el("wake-enabled").onchange = () => {
   syncWake(true);
 };
 el("auto-send").onchange = savePreferences;
-async function sendText(text: string, version: number, id: string): Promise<void> {
+/** `replyRevision` is the history revision a reply must be newer than to replace the submission notice. */
+async function sendText(text: string, version: number, id: string, replyRevision = history.revision): Promise<void> {
   if (!current(version) || !active) return;
-  const replyRevision = history.revision;
   status("서버로 전송 중 · 아직 저장 확인 전");
   const result = await request<{ status: string }>("/api/device/utterances", "POST", utteranceBody(id, text));
   if (!current(version) || !active) return;

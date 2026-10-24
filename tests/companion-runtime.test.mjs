@@ -634,3 +634,270 @@ test("a send in flight across a G2 foreground exit keeps the typed text, and res
     h.restore();
   }
 });
+
+const LIVE = "실시간 인식 (미확정)";
+const FINISHING = "전사 마무리 중 · 미확정 · 아직 전송 전";
+const partial = (socket, ...tokens) =>
+  socket.reply({ tokens: tokens.map(([text, is_final = false]) => ({ text, is_final })) });
+const bodies = (h) => h.writes.filter((w) => w.containerID === 1).map((w) => w.content);
+/** Records every text the phone display status (a polite live region) is set to. */
+function announcements(h) {
+  const display = h.get("display");
+  const said = [];
+  let text = display.textContent;
+  Object.defineProperty(display, "textContent", {
+    get: () => text,
+    set: (value) => {
+      text = value;
+      said.push(value);
+    },
+  });
+  return said;
+}
+
+test("manual hold shows Soniox running text on G2 as unconfirmed, paced by acknowledgements, and submits only the final", async () => {
+  const held = [];
+  let hold = false;
+  const h = await boot({
+    storage: ready,
+    write: (update) => (hold && update.containerID === 1 ? new Promise((resolve) => held.push(resolve)) : true),
+  });
+  try {
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    assert.equal(
+      bodies(h).at(-1),
+      "녹음 중 · 손을 떼면 전사 후 전송합니다.",
+      "the instruction shows until speech is heard",
+    );
+    const said = announcements(h);
+    partial(socket, ["내일"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일`);
+    assert.equal(h.get("partial").textContent, "실시간 인식 (미확정): 내일", "the phone keeps its own running text");
+    // A slow G2 acknowledgement: partials arriving meanwhile are coalesced into one write of the newest text.
+    hold = true;
+    partial(socket, ["내일 ", true], ["일정", false]);
+    await h.flush();
+    const inFlight = bodies(h).length;
+    for (const text of ["일정 알", "일정 알려", "일정 알려줘"]) {
+      partial(socket, [text]);
+      await h.flush();
+    }
+    assert.equal(bodies(h).length, inFlight, "nothing more is written while one update is unacknowledged");
+    hold = false;
+    held.shift()(true);
+    await h.flush();
+    assert.equal(bodies(h).length, inFlight + 1, "one write follows the acknowledgement");
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정 알려줘`, "and it carries the newest running text");
+    assert.deepEqual(said, ["G2에 실시간 인식(미확정) 표시 중"], "the live region is not re-announced per partial");
+    assert.equal(h.posts.length, 0, "running text is never submitted");
+    // Release keeps what was heard under a finishing label until Soniox finishes.
+    await h.event(EVENT.RELEASE, "textEvent");
+    assert.equal(bodies(h).at(-1), `${FINISHING}\n내일 일정 알려줘`);
+    partial(socket, ["일정 알려줘요"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${FINISHING}\n내일 일정 알려줘요`);
+    socket.reply({ tokens: [{ text: "일정 알려줘요", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(h.posts.length, 1, "exactly one submission");
+    assert.equal(JSON.parse(h.posts[0].body).text, "내일 일정 알려줘요", "only the final transcript is sent");
+    assert.match(bodies(h).at(-1), /^서버에 저장됨/, "the submission notice replaces the running text");
+    assert.equal(h.get("partial").hidden, true);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a reply arriving during Hey dots speech waits behind the running text and is shown once the capture is submitted", async () => {
+  const messages = [];
+  const h = await boot({ storage: ready, messages });
+  try {
+    await h.frame();
+    const detector = h.detectors.at(-1);
+    detector.event({ type: "wake" });
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "Hey dots 감지됨 · 질문을 말하세요.");
+    detector.event({ type: "audio", pcm: new Uint8Array(640) });
+    await h.flush();
+    const socket = h.sockets.at(-1);
+    partial(socket, ["오늘 날씨"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨`);
+    messages.push({ message_id: "earlier", text: "이전 질문의 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "이전 질문의 답변", "the phone shows the reply at once");
+    assert.match(h.get("status").textContent, /전송 후 표시/);
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨`, "the reply does not take the G2 body from the speaker");
+    partial(socket, ["오늘 날씨 어때"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n오늘 날씨 어때`, "running text keeps updating");
+    detector.event({ type: "clip", wav: new Uint8Array(684), seconds: 1 });
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${FINISHING}\n오늘 날씨 어때`);
+    socket.reply({ tokens: [{ text: "오늘 날씨 어때", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(h.posts.length, 1);
+    assert.equal(JSON.parse(h.posts[0].body).text, "오늘 날씨 어때");
+    assert.equal(bodies(h).at(-1), "이전 질문의 답변", "the waiting reply is shown after submission");
+    assert.match(h.get("status").textContent, /최신 답변/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("moving to a message ends the G2 running text, and finishing does not bring it back", async () => {
+  const h = await boot({
+    storage: ready,
+    messages: [
+      { message_id: "a", text: "첫 답변", createdAt: "2026-10-24T00:00:00Z" },
+      { message_id: "b", text: "둘째 답변", createdAt: "2026-10-24T00:00:01Z" },
+    ],
+  });
+  try {
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    partial(socket, ["질문"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n질문`);
+    h.get("prev-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "첫 답변");
+    const after = bodies(h).length;
+    partial(socket, ["질문 하나"]);
+    await h.flush();
+    assert.equal(bodies(h).length, after, "running text no longer writes over the chosen message");
+    await h.event(EVENT.RELEASE, "textEvent");
+    partial(socket, ["질문 하나요"]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "음성 전사 마무리 중 · 아직 전송 전", "the finishing notice stays plain");
+    assert.ok(
+      bodies(h)
+        .slice(after)
+        .every((body) => !body.includes("미확정")),
+    );
+    socket.reply({ tokens: [{ text: "질문 하나요", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(h.posts.length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+test("late running text after a pause, a new cue, Hey dots off or a host exit never reaches G2", async () => {
+  const late = (handler, text) => handler({ data: JSON.stringify({ tokens: [{ text, is_final: false }] }) });
+  const paused = await boot({ storage: ready });
+  try {
+    await paused.event(EVENT.LONG_PRESS, "textEvent");
+    await paused.frame();
+    const socket = paused.sockets.at(-1);
+    const handler = socket.onmessage;
+    partial(socket, ["멈추기 전"]);
+    await paused.flush();
+    await paused.event(EVENT.LEAVE);
+    const after = bodies(paused).length;
+    late(handler, "멈춘 뒤");
+    await paused.flush();
+    await paused.event(EVENT.ENTER);
+    assert.ok(
+      bodies(paused)
+        .slice(after)
+        .every((body) => !body.includes("미확정")),
+      "no unconfirmed text after cancel",
+    );
+    assert.match(bodies(paused).at(-1), /음성 입력을 멈췄습니다/, "resume says the capture stopped");
+    assert.equal(paused.posts.length, 0);
+  } finally {
+    paused.restore();
+  }
+  const recue = await boot({ storage: ready });
+  try {
+    await recue.frame();
+    const detector = recue.detectors.at(-1);
+    detector.event({ type: "wake" });
+    await recue.flush();
+    detector.event({ type: "audio", pcm: new Uint8Array(640) });
+    await recue.flush();
+    const first = recue.sockets.at(-1);
+    const handler = first.onmessage;
+    partial(first, ["첫 신호"]);
+    await recue.flush();
+    detector.event({ type: "wake" });
+    await recue.flush();
+    assert.equal(bodies(recue).at(-1), "Hey dots 감지됨 · 질문을 말하세요.", "a new cue starts from its instruction");
+    late(handler, "첫 신호 늦게");
+    await recue.flush();
+    assert.equal(bodies(recue).at(-1), "Hey dots 감지됨 · 질문을 말하세요.", "the withdrawn session cannot write");
+  } finally {
+    recue.restore();
+  }
+  const off = await boot({ storage: ready });
+  try {
+    await off.frame();
+    const detector = off.detectors.at(-1);
+    detector.event({ type: "wake" });
+    await off.flush();
+    detector.event({ type: "audio", pcm: new Uint8Array(640) });
+    await off.flush();
+    const socket = off.sockets.at(-1);
+    const handler = socket.onmessage;
+    partial(socket, ["취소될 말"]);
+    await off.flush();
+    assert.equal(bodies(off).at(-1), `${LIVE}\n취소될 말`);
+    off.get("wake-enabled").checked = false;
+    off.get("wake-enabled").onchange();
+    await off.flush();
+    assert.equal(socket.closed, true);
+    assert.equal(
+      bodies(off).at(-1),
+      "Hey dots 감지됨 · 질문을 말하세요.",
+      "a cancelled capture drops its unconfirmed text",
+    );
+    late(handler, "취소된 뒤");
+    await off.flush();
+    assert.equal(bodies(off).at(-1), "Hey dots 감지됨 · 질문을 말하세요.");
+    assert.equal(off.posts.length, 0);
+  } finally {
+    off.restore();
+  }
+  const exited = await boot({ storage: ready });
+  try {
+    await exited.event(EVENT.LONG_PRESS, "textEvent");
+    await exited.frame();
+    const handler = exited.sockets.at(-1).onmessage;
+    await exited.event(EVENT.SYSTEM_EXIT);
+    const writes = exited.writes.length;
+    late(handler, "종료 뒤");
+    await exited.flush();
+    assert.equal(exited.writes.length, writes, "nothing is written after a host exit");
+  } finally {
+    exited.restore();
+  }
+});
+
+test("long Korean running text is shown whole up to the update limit, then keeps its newest part", async () => {
+  const h = await boot({ storage: ready });
+  try {
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    const whole = "가나다라 ".repeat(395);
+    partial(socket, [whole]);
+    await h.flush();
+    assert.equal(bodies(h).at(-1), `${LIVE}\n${whole.trim()}`, "1,974 units stay whole: no pagination");
+    const over = "앞".repeat(1500) + "😀".repeat(600) + "끝";
+    partial(socket, [over]);
+    await h.flush();
+    const body = bodies(h).at(-1);
+    assert.ok(body.length <= 2000, "within the SDK's 2,000-unit update limit");
+    assert.ok(body.startsWith(`${LIVE}\n…`));
+    assert.ok(body.endsWith("😀끝"));
+    assert.equal(body.isWellFormed(), true);
+    const update = h.writes.findLast((w) => w.containerID === 1);
+    assert.equal(update.contentLength, update.content.length);
+  } finally {
+    h.restore();
+  }
+});

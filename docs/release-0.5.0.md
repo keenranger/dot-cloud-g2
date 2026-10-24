@@ -1,13 +1,13 @@
 # 0.5.0 release candidate — 2026-10-24
 
-**LOCAL CANDIDATE — NOT DEPLOYED, UPLOADED OR SUBMITTED.** Current production is Even Hub 0.4.2 (build 120294, Private, no channels) and a relay without retention or erase. The parent's Even Hub CLI check found 0.4.2 as the latest remote version and 0.5.0 unused. Native Sites publishing, Even Hub upload/update, beta promotion, review submission and purge schedule activation are not authorized for this candidate.
+**DEPLOYED RELAY AND PRIVATE BUILD — NOT A PUBLIC STORE RELEASE.** Sites version 6 deployed successfully on 2026-10-24 at 12:16:10.672605 UTC from signed source `7f48b9c4d217e4e111477c5aed261c08133ed841`. Even Hub CLI upload and read-back confirmed version 0.5.0, build 120792, Private, with no channels. Public store release, beta promotion and policy approval are not established.
 
 ## Source
 
 - Base `a266438` on `prepare-public-release`, which includes `7189b3b` (saved voice preferences, G2 audio status) and the pinned pnpm toolchain.
 - Local candidate changes: the retention and owner-erase backend (`outputs/release-readiness/retention-implementation.md`) and the companion's reaction to erase and expiry (`outputs/release-readiness/companion-erasure.md`).
 - Version `0.5.0` in `even-app/package.json` and `even-app/scripts/manifest.mjs`. The `packageManager` field and dependencies are unchanged.
-- **The bounded independent corrected-source review found no actionable findings.** The local candidate was built and packaged from signed source `1341beada3bd2dfd5bd181e8359cfd24118897bc` on `prepare-public-release`; it is not merged to main.
+- **The bounded independent corrected-source review found no actionable findings.** The deployed relay and uploaded package use signed source `7f48b9c4d217e4e111477c5aed261c08133ed841` (integrated caption and retention work plus the final deferred-reply fix). GitHub publication/main merge is not asserted by this deployment record.
 
 ## User-visible changes since 0.4.2
 
@@ -35,23 +35,18 @@ No API key or secret is bundled in the package. Voice transcription uses a Sonio
 
 | Gate | Source | Mock / local | Hosted / physical |
 | --- | --- | --- | --- |
-| Retention fence and owner erase | Working tree, bounded corrected-source review clean | Root `pnpm test` 76/76, lint, typecheck, build (retention report) | Hosted D1 migration `0003`: not run |
-| Companion erase and expiry | Working tree, bounded corrected-source review clean | Companion 98/98, runtime 22/22 (erasure report); mock boundaries only; no hosted integration | Even Hub WebView on G2: not observed |
+| Retention fence and owner erase | Signed source `7f48b9c`; reviewed | Root `pnpm test` 95/95, lint, typecheck, build (retention report) | Sites workflow applies migration `0003`; independent hosted D1 verification OPEN |
+| Companion erase and expiry | Signed source `7f48b9c`; reviewed | Companion 100/100, runtime 41/41 (erasure report); mock boundaries only; no hosted integration | Even Hub WebView on G2: not observed |
 | Saved preferences | `a266438` | Saved-OFF and unreadable-OFF runtime tests | Relaunch persistence on iPhone: not observed |
 | Audio observation | `a266438` | Quiet, zero-frame, exit runtime tests; even-app 95/95 at that point (audio-fixes appendix) | 60 s silence frame cadence, locked and unlocked: not observed |
 | Scheduled purge | Tool only | Bounded sweep tests R4, R9, R10 | Schedule not created; no run observed |
-| 0.5.0 package | Signed source `1341bea`, candidate branch only | `outputs/dot-cloud-0.5.0.ehpk`, 7,565,949 bytes, SHA-256 `2253d34fa3f1768f2756e016d61695bdc4a51feb293bd6ed308995b18889f679` | Not uploaded |
+| 0.5.0 package | Signed source `7f48b9c` | `outputs/dot-cloud-0.5.0.ehpk`, 7,566,491 bytes, SHA-256 `daee63bd8776fbd7c958ae4a1a6759cdfa78abad322a526140cc15ee85dc52c4` | CLI upload/read-back: 120792, Private, no channels |
 
 Test counts are from the worker reports at the time they ran. Re-run the integrated suites on the final tree before building.
 
-## Before release (each needs its own authorization)
+## Remaining release gates
 
-1. Final backend and companion source review, then a signed commit.
-2. Local build, pack and checksum complete for source `1341bea`; retain artifact identity through any later authorized release.
-3. Native Sites deploy (applies migration `0003`), then a hosted check of the retention tool and the erase route.
-4. Activation of the 03:00 Asia/Seoul purge schedule, and a verified run, before any copy describes automatic physical deletion.
-5. Even Hub upload of 0.5.0 as Private, then physical iPhone + G2 QA (erase sync, relaunch persistence, audio status, locked phone).
-6. Public developer identity/contact approved 2026-10-24: keenranger / kghnkl0103@gmail.com. Portal phone/address scope, legal review of policy and terms, effective date and hosting remain unresolved; mailbox operation is unverified. Beta promotion and review submission are separate decisions.
+Sites deployment and the Private upload completed under explicit user authorization. The intended 03:00 Asia/Seoul cleanup is not active; the maintenance tool is not currently exposed in the connected native MCP inventory, and updated tool discovery/reconnection is needed before hosted writer/quota verification. Hosted batch/metadata/write/quota checks and physical iPhone + G2 QA remain open. Public developer/contact values keenranger / kghnkl0103@gmail.com are approved; phone/address, legal review, effective date, hosting and mailbox operation remain unresolved. Policy drafts, beta promotion, store review and public release are separate gates.
 
 ## Local retention verification update
 
@@ -61,9 +56,9 @@ Each maintenance invocation targets at most 20,000 rows and uses at most 41 SQL 
 
 Submission-time fallback cleanup is best-effort: failure logs only the constant, non-content warning `retention_fallback_sweep_failed` and does not block a fresh submission. Read and expiry fences still apply; insertion failures remain errors.
 
-Final parent checks passed: root tests 76/76, companion tests 98/98, root lint/typecheck/build, companion lint/typecheck:test/build, pinned wake-asset verification, and diff checks. The bounded independent corrected-source review closed the initial sweep-resurrection, callback-expiry and phone-expiry findings with no actionable findings. Tests use SQLite/D1 shims and fake host/provider boundaries; they do not establish hosted D1 or physical behavior. Hosted migration 0003, atomic batch behavior, deletion metadata, quota, schedule activation and real-device validation remain open.
+Final parent checks passed: root tests 95/95, companion tests 100/100, runtime scenarios 41/41, root lint/typecheck/build, companion lint/typecheck:test/build, pinned wake-asset verification, and diff checks. The bounded independent corrected-source review closed the initial sweep-resurrection, callback-expiry and phone-expiry findings with no actionable findings. Tests use SQLite/D1 shims and fake host/provider boundaries; they do not establish hosted D1 or physical behavior. Independent hosted migration verification, atomic batch behavior, deletion metadata, quota, schedule activation and real-device validation remain open.
 
-## Local package and reproducibility
+## Historical pre-integration package and reproducibility (`1341bea`)
 
 `outputs/dot-cloud-0.5.0.ehpk`, 7,565,949 bytes, SHA-256 `2253d34fa3f1768f2756e016d61695bdc4a51feb293bd6ed308995b18889f679`. Packaged with the official Even Hub CLI 0.2, SDK 0.0.16 and minimum app version 2.2.10. Packaging is not upload or hosted/device validation.
 
@@ -74,3 +69,7 @@ Later documentation-only commits do not change this artifact’s source provenan
 ## Approved public developer and contact
 
 The owner approved public developer/operator display name **keenranger** and public support/privacy email **kghnkl0103@gmail.com** on 2026-10-24. This approval covers use of these values, not publication, a legal personal name, or verification that the mailbox is operational. Policy approval, legal effective date, hosting, phone/address and any legal jurisdiction wording remain unresolved. No portal or publishing action is authorized by this identity approval.
+
+## Current deployed artifact
+
+`outputs/dot-cloud-0.5.0.ehpk`, 7,566,491 bytes, SHA-256 `daee63bd8776fbd7c958ae4a1a6759cdfa78abad322a526140cc15ee85dc52c4`. Official CLI 0.2 pack/upload, SDK 0.0.16, minimum app 2.2.10. The earlier `1341bea` clean-build result above is historical and does not prove clean-build reproducibility of `7f48b9c`. See [deployment evidence](release-0.5.0-deployment.md).

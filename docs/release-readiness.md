@@ -1,14 +1,14 @@
 # Lens MCP for G2 — release readiness checklist and reviewer packet draft
 
-**LOCAL DRAFT — NOT SUBMITTED OR APPROVED.** Updated 2026-10-24 for the local 0.5.0 candidate. Nothing here records a public review submission, store publishing, beta promotion, Sites deploy or policy/legal approval. Re-read the remote state before acting; this snapshot goes stale.
+**POLICY/REVIEWER PACKET DRAFT — NOT A PUBLIC STORE RELEASE OR LEGAL APPROVAL.** Updated 2026-10-24. Sites version 6 deployed successfully on 2026-10-24 at 12:16:10.672605 UTC from signed source `7f48b9c4d217e4e111477c5aed261c08133ed841`. Even Hub CLI upload and read-back confirmed version 0.5.0, build 120792, Private, with no channels. Public store release, beta promotion and policy approval are not established. Re-read external state before acting.
 
-| | Current production | Local candidate |
+| Target | Confirmed deployment | Remaining proof |
 | --- | --- | --- |
-| Even Hub | 0.4.2, build 120294, Private, no channels (latest per the parent's CLI check; 0.5.0 unused remotely) | 0.5.0 in `even-app/package.json` and `even-app/scripts/manifest.mjs`; built and packaged locally from signed candidate source `1341bea`; not uploaded or merged to main |
-| Source | 0.4.2 built from `bb4c0a6` | signed local candidate `1341bea` (includes saved preferences, audio diagnostics, retention and owner erase); **bounded corrected-source review clean; hosted validation pending** |
-| Relay | Deployed Site without retention/erase; migration `0003` not applied | Retention fence, owner erase and bounded purge tool in the working tree; not deployed |
+| Even Hub | 0.5.0, build 120792, Private, no channels; CLI upload/read-back size 7,566,491 bytes | Physical install/runtime, beta/public review |
+| Source | Signed `7f48b9c4d217e4e111477c5aed261c08133ed841` | Sites source push does not establish GitHub/main publication |
+| Relay | Sites version 6 succeeded; public audience unchanged; workflow applies migration `0003` | Independent hosted D1 batch/metadata/write/quota verification |
 
-Not authorized for this candidate: native Sites publish/deploy, Even Hub upload/update, beta promotion, review submission, purge schedule activation.
+Cleanup scheduling is not active. The native MCP maintenance tool is not currently exposed; updated tool discovery/reconnection is needed before hosted writer/quota verification. Public policies and reviewer materials remain drafts. See [deployment evidence](release-0.5.0-deployment.md).
 
 The Even Hub requirements come from the official [App Submission & QA Guidelines](https://hub.evenrealities.com/docs/ship/app-submission), [Packaging & Deployment](https://hub.evenrealities.com/docs/ship/packaging), [CLI apps](https://hub.evenrealities.com/docs/cli/apps) and [CLI builds](https://hub.evenrealities.com/docs/cli/builds).
 
@@ -30,12 +30,12 @@ Status values are DONE, OPEN, OWNER (needs an owner decision) and PENDING (separ
 | Gate | Requirement | Evidence | Status |
 | --- | --- | --- | --- |
 | Package ID | Reverse-domain, lowercase, no hyphens | Source: `app.mark.evendotscloud` (`even-app/scripts/manifest.mjs`) | DONE |
-| Edition, version, SDK | `202601`; x.y.z; `min_sdk_version` at least 0.0.14 | Source: `202601`, `0.5.0` (candidate; production is `0.4.2`), `0.0.16` | DONE (source) |
+| Edition, version, SDK | `202601`; x.y.z; `min_sdk_version` at least 0.0.14 | Source: `202601`, `0.5.0` (Private build), `0.0.16` | DONE (source) |
 | Name | 20 characters or fewer, no "Even"; must match listing and glasses name | Source: `Lens MCP for G2` (15). Portal: the listing name matches. Physical: the name shown on the glasses is not observed. | DONE (source, portal); glasses name OPEN |
 | Permissions used and described | `network` with whitelist and `g2-microphone`, each `desc` 1–300 characters | Source: only these two are declared, and both are used. Portal: permissions checklist item is checked. | DONE |
 | No bundled secrets | No API key in the `.ehpk` | Source: no key in source or manifest. The Soniox key is supplied by the user at runtime. | DONE; reviewer note below |
-| Changelog | Non-empty, 500 characters or fewer | Portal/CLI: 0.4.2 has a changelog. 0.5.0: draft notes in `docs/release-0.5.0.md`; no upload changelog yet | OPEN (0.5.0) |
-| Package artifact | Built from merged main | 0.4.2: `outputs/qa-0.4.2/release-proof.md` (SHA-256 `4f49f0fb…d2a`, 7,564,025 bytes; root tests 29/29, companion 92/92). 0.5.0: `outputs/dot-cloud-0.5.0.ehpk`, 7,565,949 bytes, SHA-256 `2253d34fa3f1768f2756e016d61695bdc4a51feb293bd6ed308995b18889f679`; official CLI 0.2 pack, SDK 0.0.16, minimum app 2.2.10, source `1341bea` | DONE (local package); main merge/upload OPEN |
+| Changelog | Non-empty, 500 characters or fewer | Portal/CLI: 0.4.2 has a changelog. 0.5.0: CLI upload completed; public release notes remain draft | OPEN (0.5.0) |
+| Package artifact | Built from merged main | 0.4.2: `outputs/qa-0.4.2/release-proof.md` (SHA-256 `4f49f0fb…d2a`, 7,564,025 bytes; root tests 29/29, companion 92/92). 0.5.0: `outputs/dot-cloud-0.5.0.ehpk`, 7,566,491 bytes, SHA-256 `daee63bd8776fbd7c958ae4a1a6759cdfa78abad322a526140cc15ee85dc52c4`; SDK 0.0.16, minimum app 2.2.10, source `7f48b9c`, CLI upload/read-back confirmed | DONE (Private upload); GitHub/main publication not asserted |
 
 ### Store listing (portal)
 
@@ -58,9 +58,9 @@ Status values are DONE, OPEN, OWNER (needs an owner decision) and PENDING (separ
 | Soniox key session-only by default, remembered only on explicit opt-in | Source: `even-app/src/soniox-key.ts`, `even-app/index.html` (opt-in unchecked); the preference store never writes the key (asserted in tests) | DONE (settled) |
 | Proactive messages broadcast to all of the owner's devices | Source: `lib/relay/core.ts` `send` / `messages` | DONE (documented) |
 | Retention requirement | Owner approved a 30-day UTC cutoff plus immediate owner erase | DONE (settled) |
-| 30-day read/delivery cutoff (0.5.0) | Source: `lib/relay/core.ts` `RETENTION_MS`, `cutoff()`/`live()`; every conversation read in `lib/relay/store.ts` fenced on `createdAt`. Mock: `tests/retention.test.mjs` R1–R17; root `pnpm test` 76/76 (`outputs/release-readiness/retention-implementation.md`) | Source + Mock; bounded corrected-source review clean; hosted D1 OPEN |
+| 30-day read/delivery cutoff (0.5.0) | Source: `lib/relay/core.ts` `RETENTION_MS`, `cutoff()`/`live()`; every conversation read in `lib/relay/store.ts` fenced on `createdAt`. Mock: `tests/retention.test.mjs` R1–R17; root `pnpm test` 95/95 (`outputs/release-readiness/retention-implementation.md`) | Source + Mock; bounded corrected-source review clean; hosted D1 OPEN |
 | Owner erase with tombstones and revision (0.5.0) | Source: `store.ts` `eraseConversations`, `insertUnlessErased`; `app/api/conversations/delete/route.ts`; dashboard control. Mock: D1–D7 and the HTTP delete-route test | Source + Mock; bounded corrected-source review clean; hosted OPEN |
-| Companion clears cache on revision increase and prunes by cutoff (0.5.0) | Source: `even-app/src/message-history.ts`, `main.ts` poll. Mock: 5 runtime tests, companion 98/98 (`outputs/release-readiness/companion-erasure.md`); fixtures use the agreed shape, mock boundaries only; no hosted integration | Mock; integration and physical OPEN |
+| Companion clears cache on revision increase and prunes by cutoff (0.5.0) | Source: `even-app/src/message-history.ts`, `main.ts` poll. Mock: 5 runtime tests, companion 100/100 (`outputs/release-readiness/companion-erasure.md`); fixtures use the agreed shape, mock boundaries only; no hosted integration | Mock; integration and physical OPEN |
 | Scheduled physical purge (intended daily 03:00 Asia/Seoul) | Source: bounded `enforce_conversation_retention` MCP tool (at most 20,000 rows and 41 statements including rate limiting per invocation). **No schedule is activated or published** | OPEN (not activated; needs authorization) |
 | Provider/backup limits disclosed | Docs: README, privacy draft, release copy | DONE (copy) |
 | Hey dots and auto-send OFF/ON choice remembered (0.5.0) | Source at `a266438`: `even-app/src/preferences.ts` (`dot-cloud-preferences-v1`), settings wake blocker. Mock: saved-OFF and unreadable-OFF runtime tests | Source + Mock; relaunch persistence physical OPEN |
@@ -87,7 +87,7 @@ No physical target phone was available in the 2026-10-24 environment audit, so e
 
 ## Reviewer packet draft
 
-A verified local 0.5.0 package exists from `1341bea`; paste these reviewer notes only after owner approval. Public developer identity/contact are approved (2026-10-24): keenranger / kghnkl0103@gmail.com. These reviewer notes do not settle legal details, mailbox operation, effective dates or hosting.
+A verified uploaded 0.5.0 Private package exists from `7f48b9c`; paste these reviewer notes only after owner approval. Public developer identity/contact are approved (2026-10-24): keenranger / kghnkl0103@gmail.com. These reviewer notes do not settle legal details, mailbox operation, effective dates or hosting.
 
 > **What it is.** Lens MCP for G2 is an independent companion that connects the user's own ChatGPT Dot to G2 through MCP. It is not an official Even Realities app and not a general-purpose MCP client.
 >
@@ -124,8 +124,8 @@ Each maintenance invocation targets at most 20,000 rows and uses at most 41 SQL 
 
 Submission-time fallback cleanup is best-effort: failure logs only the constant, non-content warning `retention_fallback_sweep_failed` and does not block a fresh submission. Read and expiry fences still apply; insertion failures remain errors.
 
-Final parent checks passed: root tests 76/76, companion tests 98/98, root lint/typecheck/build, companion lint/typecheck:test/build, pinned wake-asset verification, and diff checks. The bounded independent corrected-source review closed the initial sweep-resurrection, callback-expiry and phone-expiry findings with no actionable findings. Tests use SQLite/D1 shims and fake host/provider boundaries; they do not establish hosted D1 or physical behavior. Hosted migration 0003, atomic batch behavior, deletion metadata, quota, schedule activation and real-device validation remain open.
+Final parent checks passed: root tests 95/95, companion tests 100/100, runtime scenarios 41/41, root lint/typecheck/build, companion lint/typecheck:test/build, pinned wake-asset verification, and diff checks. The bounded independent corrected-source review closed the initial sweep-resurrection, callback-expiry and phone-expiry findings with no actionable findings. Tests use SQLite/D1 shims and fake host/provider boundaries; they do not establish hosted D1 or physical behavior. Independent hosted migration verification, atomic batch behavior, deletion metadata, quota, schedule activation and real-device validation remain open.
 
-## Final local clean-build evidence
+## Historical pre-integration clean-build evidence (`1341bea`)
 
 Two independent source-only exports of `1341bea`, isolated dependency stores, frozen pnpm 12.14.0 installs and companion builds under Node 24.13.0 (Darwin arm64) passed. All 17 dist paths and SHA-256 values matched each other and the candidate. See `outputs/release-readiness/final-clean-build.md`; this is local build evidence only. Artifact provenance remains `1341bea` even after documentation-only commits. No main merge, upload, hosted verification or physical acceptance is implied.

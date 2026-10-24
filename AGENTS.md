@@ -93,6 +93,12 @@ This records the earlier 0.3.0 release only; it does not describe the current so
 
 Re-read the remote state before acting; these historical snapshots are not current-state verification.
 
+### Deployment snapshot (2026-10-24)
+
+- Signed source `7f48b9c4d217e4e111477c5aed261c08133ed841`; native Sites workflow saved version 6 and deployment `appgdep_6adca17de560819180424353d0c654a1` succeeded at 12:16:10.672605 UTC. Audience remained public.
+- Even Hub 0.5.0, build 120792: Private, no channels, 7,566,491 bytes; SHA-256 `daee63bd8776fbd7c958ae4a1a6759cdfa78abad322a526140cc15ee85dc52c4`. CLI upload/read-back confirmed; SDK 0.0.16, minimum Even app 2.2.10.
+- See `docs/release-0.5.0-deployment.md`. Daily cleanup is not active; hosted D1 semantics/quota and physical runtime proof remain open. Policy documents remain drafts. Re-read remote state before acting.
+
 ## Security and evidence
 
 - Soniox: the phone connects directly to Soniox over WSS with the user's key. The key stays in session memory by default; device persistence is an opt-in SDK setting. The relay never receives the key or raw audio.

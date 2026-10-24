@@ -7,7 +7,7 @@
 - Base `a266438` on `prepare-public-release`, which includes `7189b3b` (saved voice preferences, G2 audio status) and the pinned pnpm toolchain.
 - Local candidate changes: the retention and owner-erase backend (`outputs/release-readiness/retention-implementation.md`) and the companion's reaction to erase and expiry (`outputs/release-readiness/companion-erasure.md`).
 - Version `0.5.0` in `even-app/package.json` and `even-app/scripts/manifest.mjs`. The `packageManager` field and dependencies are unchanged.
-- **The bounded independent corrected-source review found no actionable findings.** The parent owns the final version build.
+- **The bounded independent corrected-source review found no actionable findings.** The local candidate was built and packaged from signed source `1341beada3bd2dfd5bd181e8359cfd24118897bc` on `prepare-public-release`; it is not merged to main.
 
 ## User-visible changes since 0.4.2
 
@@ -40,14 +40,14 @@ No API key or secret is bundled in the package. Voice transcription uses a Sonio
 | Saved preferences | `a266438` | Saved-OFF and unreadable-OFF runtime tests | Relaunch persistence on iPhone: not observed |
 | Audio observation | `a266438` | Quiet, zero-frame, exit runtime tests; even-app 95/95 at that point (audio-fixes appendix) | 60 s silence frame cadence, locked and unlocked: not observed |
 | Scheduled purge | Tool only | Bounded sweep tests R4, R9, R10 | Schedule not created; no run observed |
-| 0.5.0 package | Version fields only | Not built here | Not uploaded |
+| 0.5.0 package | Signed source `1341bea`, candidate branch only | `outputs/dot-cloud-0.5.0.ehpk`, 7,565,949 bytes, SHA-256 `2253d34fa3f1768f2756e016d61695bdc4a51feb293bd6ed308995b18889f679` | Not uploaded |
 
 Test counts are from the worker reports at the time they ran. Re-run the integrated suites on the final tree before building.
 
 ## Before release (each needs its own authorization)
 
 1. Final backend and companion source review, then a signed commit.
-2. Parent's final 0.5.0 build, pack and checksum.
+2. Local build, pack and checksum complete for source `1341bea`; retain artifact identity through any later authorized release.
 3. Native Sites deploy (applies migration `0003`), then a hosted check of the retention tool and the erase route.
 4. Activation of the 03:00 Asia/Seoul purge schedule, and a verified run, before any copy describes automatic physical deletion.
 5. Even Hub upload of 0.5.0 as Private, then physical iPhone + G2 QA (erase sync, relaunch persistence, audio status, locked phone).
@@ -62,3 +62,11 @@ Each maintenance invocation targets at most 20,000 rows and uses at most 41 SQL 
 Submission-time fallback cleanup is best-effort: failure logs only the constant, non-content warning `retention_fallback_sweep_failed` and does not block a fresh submission. Read and expiry fences still apply; insertion failures remain errors.
 
 Final parent checks passed: root tests 76/76, companion tests 98/98, root lint/typecheck/build, companion lint/typecheck:test/build, pinned wake-asset verification, and diff checks. The bounded independent corrected-source review closed the initial sweep-resurrection, callback-expiry and phone-expiry findings with no actionable findings. Tests use SQLite/D1 shims and fake host/provider boundaries; they do not establish hosted D1 or physical behavior. Hosted migration 0003, atomic batch behavior, deletion metadata, quota, schedule activation and real-device validation remain open.
+
+## Local package and reproducibility
+
+`outputs/dot-cloud-0.5.0.ehpk`, 7,565,949 bytes, SHA-256 `2253d34fa3f1768f2756e016d61695bdc4a51feb293bd6ed308995b18889f679`. Packaged with the official Even Hub CLI 0.2, SDK 0.0.16 and minimum app version 2.2.10. Packaging is not upload or hosted/device validation.
+
+Two independent source-only exports of `1341bea`, isolated dependency stores, frozen pnpm 12.14.0 installs and companion builds under Node 24.13.0 (Darwin arm64) passed. All 17 dist paths and SHA-256 values matched each other and the candidate. See `outputs/release-readiness/final-clean-build.md`; this is local build evidence only.
+
+Later documentation-only commits do not change this artifact’s source provenance (`1341bea`).

@@ -4,8 +4,8 @@
 
 | | Current production | Local candidate |
 | --- | --- | --- |
-| Even Hub | 0.4.2, build 120294, Private, no channels (latest per the parent's CLI check; 0.5.0 unused remotely) | 0.5.0 in `even-app/package.json` and `even-app/scripts/manifest.mjs`; not built, packaged or uploaded here (the parent owns the final build) |
-| Source | 0.4.2 built from `bb4c0a6` | base `a266438` (adds saved preferences and non-invasive audio status, `7189b3b`) plus local retention/erase backend and companion changes; **bounded corrected-source review clean; hosted validation pending** |
+| Even Hub | 0.4.2, build 120294, Private, no channels (latest per the parent's CLI check; 0.5.0 unused remotely) | 0.5.0 in `even-app/package.json` and `even-app/scripts/manifest.mjs`; built and packaged locally from signed candidate source `1341bea`; not uploaded or merged to main |
+| Source | 0.4.2 built from `bb4c0a6` | signed local candidate `1341bea` (includes saved preferences, audio diagnostics, retention and owner erase); **bounded corrected-source review clean; hosted validation pending** |
 | Relay | Deployed Site without retention/erase; migration `0003` not applied | Retention fence, owner erase and bounded purge tool in the working tree; not deployed |
 
 Not authorized for this candidate: native Sites publish/deploy, Even Hub upload/update, beta promotion, review submission, purge schedule activation.
@@ -35,7 +35,7 @@ Status values are DONE, OPEN, OWNER (needs an owner decision) and PENDING (separ
 | Permissions used and described | `network` with whitelist and `g2-microphone`, each `desc` 1–300 characters | Source: only these two are declared, and both are used. Portal: permissions checklist item is checked. | DONE |
 | No bundled secrets | No API key in the `.ehpk` | Source: no key in source or manifest. The Soniox key is supplied by the user at runtime. | DONE; reviewer note below |
 | Changelog | Non-empty, 500 characters or fewer | Portal/CLI: 0.4.2 has a changelog. 0.5.0: draft notes in `docs/release-0.5.0.md`; no upload changelog yet | OPEN (0.5.0) |
-| Package artifact | Built from merged main | 0.4.2: `outputs/qa-0.4.2/release-proof.md` (SHA-256 `4f49f0fb…d2a`, 7,564,025 bytes; root tests 29/29, companion 92/92). 0.5.0: no artifact; local source reviewed; final artifact not packaged | DONE (0.4.2); OPEN (0.5.0) |
+| Package artifact | Built from merged main | 0.4.2: `outputs/qa-0.4.2/release-proof.md` (SHA-256 `4f49f0fb…d2a`, 7,564,025 bytes; root tests 29/29, companion 92/92). 0.5.0: `outputs/dot-cloud-0.5.0.ehpk`, 7,565,949 bytes, SHA-256 `2253d34fa3f1768f2756e016d61695bdc4a51feb293bd6ed308995b18889f679`; official CLI 0.2 pack, SDK 0.0.16, minimum app 2.2.10, source `1341bea` | DONE (local package); main merge/upload OPEN |
 
 ### Store listing (portal)
 
@@ -87,7 +87,7 @@ No physical target phone was available in the 2026-10-24 environment audit, so e
 
 ## Reviewer packet draft
 
-To be pasted into reviewer notes only after the owner approves it and a verified 0.5.0 build exists. It contains no operator, contact or legal details; those are unresolved.
+A verified local 0.5.0 package exists from `1341bea`; paste these reviewer notes only after owner approval. It contains no operator, contact or legal details; those are unresolved.
 
 > **What it is.** Lens MCP for G2 is an independent companion that connects the user's own ChatGPT Dot to G2 through MCP. It is not an official Even Realities app and not a general-purpose MCP client.
 >
@@ -125,3 +125,7 @@ Each maintenance invocation targets at most 20,000 rows and uses at most 41 SQL 
 Submission-time fallback cleanup is best-effort: failure logs only the constant, non-content warning `retention_fallback_sweep_failed` and does not block a fresh submission. Read and expiry fences still apply; insertion failures remain errors.
 
 Final parent checks passed: root tests 76/76, companion tests 98/98, root lint/typecheck/build, companion lint/typecheck:test/build, pinned wake-asset verification, and diff checks. The bounded independent corrected-source review closed the initial sweep-resurrection, callback-expiry and phone-expiry findings with no actionable findings. Tests use SQLite/D1 shims and fake host/provider boundaries; they do not establish hosted D1 or physical behavior. Hosted migration 0003, atomic batch behavior, deletion metadata, quota, schedule activation and real-device validation remain open.
+
+## Final local clean-build evidence
+
+Two independent source-only exports of `1341bea`, isolated dependency stores, frozen pnpm 12.14.0 installs and companion builds under Node 24.13.0 (Darwin arm64) passed. All 17 dist paths and SHA-256 values matched each other and the candidate. See `outputs/release-readiness/final-clean-build.md`; this is local build evidence only. Artifact provenance remains `1341bea` even after documentation-only commits. No main merge, upload, hosted verification or physical acceptance is implied.

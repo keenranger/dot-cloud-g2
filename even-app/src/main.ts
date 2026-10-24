@@ -712,7 +712,10 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
             ? "전사 완료 · 내용을 확인한 뒤 전송하세요."
             : "전사 완료 · 입력 중이던 내용 뒤에 전사 결과를 붙였습니다. 확인한 뒤 전송하세요.",
         );
-        displayText("전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
+        // A reply received during the capture comes back in place of the notice; the phone keeps the review prompt.
+        if (caption?.voice === voice && captionHolds() && history.revision !== voice.revision && history.selected)
+          showSelectedReply();
+        else displayText("전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
         return next.draft;
       },
       send: (text) => {

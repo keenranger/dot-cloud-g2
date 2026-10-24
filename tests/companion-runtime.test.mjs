@@ -1119,3 +1119,43 @@ test("an automatic submission whose response is lost or times out says storage i
     }
   }
 });
+
+test("with auto-send off, a single reply deferred during a capture reaches G2 on release while the phone keeps the draft", async () => {
+  const messages = [];
+  const h = await boot({ storage: { ...ready, [PREFS]: JSON.stringify({ wake: false, autoSend: false }) }, messages });
+  try {
+    await h.flush();
+    assert.equal(h.get("auto-send").checked, false);
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    const socket = h.sockets.at(-1);
+    partial(socket, ["내일 일정"]);
+    await h.flush();
+    messages.push({ message_id: "only", text: "하나뿐인 답변", createdAt: "2026-10-24T00:00:00Z" });
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), `${LIVE}\n내일 일정`, "the reply waits behind the running text");
+    await h.event(EVENT.RELEASE, "textEvent");
+    socket.reply({ tokens: [{ text: "내일 일정 알려줘", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(h.posts.length, 0, "review mode does not submit");
+    assert.equal(bodies(h).at(-1), "하나뿐인 답변", "the deferred reply takes the body on release");
+    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.equal(h.get("text").value, "내일 일정 알려줘", "the transcript waits in the field");
+    assert.match(h.get("status").textContent, /확인한 뒤 전송하세요/, "the phone keeps the review prompt");
+    for (let i = 0; i < 2; i++) await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "하나뿐인 답변", "later polls leave the reply in place");
+    assert.equal(h.posts.length, 0);
+    // The explicit Send then behaves as any typed send while the reply is read.
+    h.get("send").onclick();
+    await h.flush();
+    assert.equal(h.posts.length, 1, "one submission on Send");
+    assert.equal(JSON.parse(h.posts[0].body).text, "내일 일정 알려줘");
+    assert.match(bodies(h).at(-1), /^서버에 저장됨/);
+    messages.push({ message_id: "next", text: "새 답변", createdAt: "2026-10-24T00:00:01Z" });
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "새 답변", "the answer to the submission replaces its notice");
+    assert.equal(h.posts.length, 1);
+  } finally {
+    h.restore();
+  }
+});

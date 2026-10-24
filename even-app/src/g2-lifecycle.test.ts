@@ -46,9 +46,12 @@ test("hiding or locking the phone does not pause listening, capture or polling",
   // Only a genuine page unload fences the session: pagehide marks the page unloaded and pageshow brings it back.
   assert.match(
     main,
-    /addEventListener\("pagehide", \(event\) => \{\s+\/\/[^\n]*\n\s+if \(event\.persisted\) return;\s+pageLoaded = false;\s+pause\(\);\s+\}\);/,
+    /addEventListener\("pagehide", \(event\) => \{\s+\/\/[^\n]*\n\s+if \(event\.persisted\) return;\s+pageLoaded = false;\s+pause\(\);\s+status\("[^"]+"\);\s+\}\);/,
   );
-  assert.match(main, /addEventListener\("pageshow", \(\) => \{\s+pageLoaded = true;\s+resume\(\);\s+\}\);/);
+  assert.match(
+    main,
+    /addEventListener\("pageshow", \(\) => \{\s+pageLoaded = true;\s+if \(!active && !exited\) status\("[^"]+"\);\s+resume\(\);\s+\}\);/,
+  );
   // A G2 startup that settles after pagehide stays paused.
   assert.match(main, /ready = true;\s+active = pageLoaded;/);
   assert.match(main, /let active = true;/);
@@ -73,7 +76,7 @@ test("an ENTER for a page that is already active returns before any rewrite, pol
   const resume = body("resume");
   const guard = resume.indexOf("if (exited || active || !pageLoaded) return;");
   assert.ok(guard > 0, "resume() must be a no-op while active");
-  for (const effect of ["g2.forget()", "syncWake()", "void poll()", "renderDisplay()"])
+  for (const effect of ["g2.forget()", "syncWake(true)", "void poll()", "renderDisplay()"])
     assert.ok(resume.indexOf(effect) > guard, effect);
 });
 

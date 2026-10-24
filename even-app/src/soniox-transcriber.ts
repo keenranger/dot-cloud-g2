@@ -27,6 +27,7 @@ export type SonioxSocketFactory = (url: string, protocols: string[]) => SonioxSo
 
 export type SonioxFailure =
   | "invalid-audio"
+  | "no-audio"
   | "credential"
   | "aborted"
   | "timeout"
@@ -191,7 +192,8 @@ export function openSonioxStream(options: SonioxStreamOptions): SonioxStream {
   };
   const sendEnd = () => {
     if (endSent) return;
-    if (written === 0) return fail("invalid-audio");
+    // Nothing was captured, which is not malformed audio: the microphone delivered no frames.
+    if (written === 0) return fail("no-audio");
     endSent = true;
     // An empty text frame ends the stream; an empty binary frame would not.
     if (!send("")) return;
@@ -343,6 +345,8 @@ export function sttMessage(error: SonioxTranscriptionError): string {
       return "Soniox에 연결하지 못했습니다. 네트워크를 확인하고 다시 시도하세요.";
     case "invalid-audio":
       return "녹음 데이터 형식이 올바르지 않습니다.";
+    case "no-audio":
+      return "G2 마이크 오디오를 받지 못해 전사하지 않았습니다. 다시 길게 눌러 말하세요.";
     case "protocol":
       return "Soniox 응답을 해석하지 못했습니다. 다시 시도하세요.";
     case "aborted":

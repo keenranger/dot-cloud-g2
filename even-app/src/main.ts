@@ -18,6 +18,7 @@ import { SonioxKey } from "./soniox-key.ts";
 import { MessageHistory, type Reply } from "./message-history.ts";
 import { loadWakeDetector, type WakeDetector } from "./wake-detector.ts";
 import { WAKE_BLOCKED, canListen, finishWakeClip, wakeBlocker, type WakeConditions } from "./wake-gate.ts";
+import { PreferenceStore, UNKNOWN_PREFERENCES } from "./preferences.ts";
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = (text: string) => {
   el("status").textContent = text;
@@ -73,6 +74,24 @@ let keyBusy = false;
 let restored = false;
 let wakeDetector: WakeDetector | undefined;
 let wakeMicOpen = false;
+// The host did not confirm a G2 microphone stop, so it may still be open. Nothing opens it again until a stop is
+// confirmed, and that stop is retried only on an explicit trigger: a G2 resume or exit, a long press, or the toggle.
+let micUnconfirmed = false;
+const MIC_STOP_UNCONFIRMED = "마이크 중지를 확인하지 못했습니다. 길게 눌러 다시 시도하거나 Even 앱에서 종료하세요.";
+// An audioControl acknowledgement only says the host accepted the request; G2 frames show audio is arriving. The SDK
+// documents no frame cadence and may withhold frames in silence, so missing frames are reported as unknown and never
+// close, reopen or discard anything.
+const FIRST_FRAME_MS = 4000;
+const FRAME_GAP_MS = 6000;
+let micFrames = 0;
+let livenessTimer: ReturnType<typeof setTimeout> | undefined;
+// No frame arrived within the bounded wait; the next frame clears it.
+let audioQuiet = false;
+// Saved voice preferences are read before Hey dots may open the microphone; until then both checkboxes are locked.
+let settingsLoaded = false;
+let settingsNote: string | undefined;
+const SETTINGS_UNREAD = "저장된 음성 설정을 불러오지 못해 Hey dots와 자동 전송을 꺼 두었습니다. 필요하면 다시 켜세요.";
+const preferences = new PreferenceStore(() => bridge!);
 let wakeEpoch = 0;
 let wakeLabel = "마이크 꺼짐";
 // Typed or reviewed text keeps one utterance id until it is accepted, so an identical resend is idempotent on the relay.
@@ -122,6 +141,7 @@ function keyNotice(): void {
 }
 function wakeState(): WakeConditions {
   return {
+    settings: settingsLoaded,
     enabled: el<HTMLInputElement>("wake-enabled").checked,
     active: active && !exited,
     ready,
@@ -140,13 +160,48 @@ function wakeNotice(text: string): void {
   wakeLabel = text;
   if (ready) renderDisplay();
 }
-function syncWake(): void {
+/** Asks the host to stop the G2 microphone and records whether the stop was confirmed. */
+async function closeMic(): Promise<boolean> {
+  clearTimeout(livenessTimer);
+  const ok = await bridge!.audioControl(false, AudioInputSource.Glasses).catch(() => false);
+  micUnconfirmed = !ok;
+  return ok;
+}
+/**
+ * Observes whether G2 frames arrive while a microphone is open. Without frames it only says reception is unconfirmed;
+ * the microphone, detector and capture stay as they are, and it stops observing until the next frame.
+ */
+function watchAudio(): void {
+  clearTimeout(livenessTimer);
+  const seen = micFrames;
+  livenessTimer = setTimeout(
+    () => {
+      if (!wakeMicOpen && !recording) return;
+      if (micFrames > seen) return watchAudio();
+      audioQuiet = true;
+      wakeNotice(
+        recording
+          ? "수동 녹음 중 · G2 오디오 수신 확인 안 됨 · 말하면 이어서 받습니다."
+          : "Hey dots 듣는 중 · G2 오디오 수신 확인 안 됨 · 조용하면 정상일 수 있습니다.",
+      );
+    },
+    seen ? FRAME_GAP_MS : FIRST_FRAME_MS,
+  );
+}
+/** `retry` marks an explicit trigger, which may retry one unconfirmed microphone stop. */
+function syncWake(retry = false): void {
   if (!wakeAllowed()) {
     wakeEpoch++;
     wakeDetector?.cancel();
     // Hey dots is on by default, so the label says which prerequisite is missing rather than implying it listens.
     const reason = () => WAKE_BLOCKED[wakeBlocker(wakeState()) ?? "enabled"];
-    wakeNotice(wakeMicOpen ? "마이크 중지 요청 중" : reason());
+    wakeNotice(
+      wakeMicOpen || (micUnconfirmed && retry)
+        ? "마이크 중지 요청 중"
+        : micUnconfirmed
+          ? MIC_STOP_UNCONFIRMED
+          : reason(),
+    );
     // A wake capture that has not finished yet is withdrawn with its Soniox session.
     discardVoice(wakeVoice);
     wakeVoice = undefined;
@@ -155,12 +210,12 @@ function syncWake(): void {
     queueMic(async () => {
       wakeDetector?.dispose();
       wakeDetector = undefined;
-      if (wakeMicOpen) {
-        if (!(await bridge!.audioControl(false, AudioInputSource.Glasses))) {
-          wakeNotice("마이크 중지를 확인하지 못했습니다. Even 앱에서 종료하세요.");
+      if (wakeMicOpen || (micUnconfirmed && retry)) {
+        wakeMicOpen = false;
+        if (!(await closeMic())) {
+          wakeNotice(MIC_STOP_UNCONFIRMED);
           return;
         }
-        wakeMicOpen = false;
         wakeNotice(
           !el<HTMLInputElement>("wake-enabled").checked
             ? "Hey dots 꺼짐 · 마이크 꺼짐"
@@ -168,6 +223,10 @@ function syncWake(): void {
               ? "Hey dots 사용 불가 · Soniox 키 없음 · 마이크 꺼짐"
               : "Hey dots 일시 중지 · 마이크 꺼짐",
         );
+        return;
+      }
+      if (micUnconfirmed) {
+        wakeNotice(MIC_STOP_UNCONFIRMED);
         return;
       }
       // With no microphone to close, the label keeps the reason, so repeated calls such as keystrokes do not rewrite
@@ -178,6 +237,11 @@ function syncWake(): void {
   }
   queueMic(async () => {
     if (!wakeAllowed() || wakeMicOpen) return;
+    if (micUnconfirmed) {
+      // Never open over a microphone that may still be on; only an explicit trigger retries the stop.
+      if (!retry || !(await closeMic())) return wakeNotice(MIC_STOP_UNCONFIRMED);
+      if (!wakeAllowed()) return;
+    }
     const epoch = ++wakeEpoch;
     const version = generation;
     wakeNotice("Hey dots 로컬 감지 모델 준비 중");
@@ -246,15 +310,18 @@ function syncWake(): void {
       if (!(await bridge!.audioControl(true, AudioInputSource.Glasses)))
         throw new Error("G2 마이크를 시작하지 못했습니다.");
       wakeMicOpen = true;
+      micFrames = 0;
+      audioQuiet = false;
       if (!wakeAllowed() || epoch !== wakeEpoch || !current(version)) {
         detector.dispose();
         wakeDetector = undefined;
-        if (await bridge!.audioControl(false, AudioInputSource.Glasses)) wakeMicOpen = false;
-        else wakeNotice("마이크 중지를 확인하지 못했습니다. Even 앱에서 종료하세요.");
+        wakeMicOpen = false;
+        if (!(await closeMic())) wakeNotice(MIC_STOP_UNCONFIRMED);
         return;
       }
       detector.listen();
-      wakeNotice("마이크 켜짐 · 휴대폰에서 Hey dots 로컬 감지 중 · 감지 전 소리는 서버에 보내지 않습니다.");
+      wakeNotice("G2 마이크 시작 요청 수락 · 오디오 수신 대기 중");
+      watchAudio();
     } catch (e) {
       el<HTMLInputElement>("wake-enabled").checked = false;
       syncWake();
@@ -267,7 +334,17 @@ const current = (version: number) => !exited && generation === version;
 function controls(): void {
   const typed = !!el<HTMLTextAreaElement>("text").value.trim();
   el<HTMLButtonElement>("record").disabled =
-    !ready || !credentials || !sonioxKey.value || busy || recordingWanted || recording || !active || typed;
+    !ready ||
+    !settingsLoaded ||
+    !credentials ||
+    !sonioxKey.value ||
+    busy ||
+    recordingWanted ||
+    recording ||
+    !active ||
+    typed;
+  // The page default must not be saved over a choice that is still being read.
+  el<HTMLInputElement>("wake-enabled").disabled = el<HTMLInputElement>("auto-send").disabled = !settingsLoaded;
   el<HTMLButtonElement>("stop").disabled = !recordingWanted && !recording;
   el<HTMLButtonElement>("send").disabled =
     !credentials || busy || recordingWanted || !el<HTMLTextAreaElement>("text").value.trim();
@@ -280,15 +357,17 @@ function controls(): void {
     ? "Even 앱 연결을 기다리는 중입니다."
     : !ready
       ? "G2 화면을 준비하는 중입니다."
-      : !credentials
-        ? "녹음하려면 먼저 서버에 연결하세요."
-        : !sonioxKey.value
-          ? "녹음하려면 Soniox 키가 필요합니다. 아래에 직접 입력해 전송할 수는 있습니다."
-          : busy
-            ? "이전 요청을 처리하는 중입니다."
-            : typed && !recordingWanted && !recording
-              ? DRAFT_PENDING
-              : "";
+      : !settingsLoaded
+        ? "저장된 음성 설정을 불러오는 중입니다."
+        : !credentials
+          ? "녹음하려면 먼저 서버에 연결하세요."
+          : !sonioxKey.value
+            ? "녹음하려면 Soniox 키가 필요합니다. 아래에 직접 입력해 전송할 수는 있습니다."
+            : busy
+              ? "이전 요청을 처리하는 중입니다."
+              : typed && !recordingWanted && !recording
+                ? DRAFT_PENDING
+                : "";
   if (el("record-hint").textContent !== hint) el("record-hint").textContent = hint;
   el("record-hint").hidden = !hint;
   el<HTMLButtonElement>("prev-message").disabled = history.index <= 0;
@@ -600,11 +679,12 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
   }
 }
 function startRecording(): void {
-  if (!ready || !credentials || recordingWanted || recording || busy || !active || !bridge) return;
+  if (!ready || !settingsLoaded || !credentials || recordingWanted || recording || busy || !active || !bridge) return;
   if (!sonioxKey.value) return showNotice(NO_KEY);
   if (el<HTMLTextAreaElement>("text").value.trim()) return showNotice(DRAFT_PENDING);
   recordingWanted = true;
-  syncWake();
+  // A long press is an explicit trigger, so an unconfirmed earlier stop is retried once before this capture opens.
+  syncWake(true);
   bytes = 0;
   controls();
   const version = generation;
@@ -622,10 +702,10 @@ function startRecording(): void {
   queueMic(async () => {
     try {
       if (!current(version) || !recordingWanted || !active) return withdraw();
-      if (wakeMicOpen) {
+      if (wakeMicOpen || micUnconfirmed) {
         recordingWanted = false;
         withdraw();
-        throw new Error("이전 마이크 중지를 확인한 뒤 다시 시도하세요.");
+        throw new Error(MIC_STOP_UNCONFIRMED);
       }
       if (!(await bridge!.audioControl(true, AudioInputSource.Glasses))) {
         recordingWanted = false;
@@ -633,8 +713,11 @@ function startRecording(): void {
         throw new Error("G2 마이크를 시작하지 못했습니다.");
       }
       recording = true;
-      wakeNotice("마이크 켜짐 · 수동 녹음 중");
+      micFrames = 0;
+      audioQuiet = false;
+      wakeNotice("G2 마이크 시작 요청 수락 · 수동 녹음 오디오 수신 대기 중");
       if (!current(version) || !recordingWanted || !active) return;
+      watchAudio();
       status("녹음 중 · Soniox 실시간 전사 중 · 중지하면 최종 결과를 전송합니다.");
       captureText("녹음 중 · 손을 떼면 전사 후 전송합니다.");
       recordingTimer = setTimeout(() => stopRecording(false), 30000);
@@ -655,13 +738,15 @@ function stopRecording(discard: boolean): void {
   queueMic(async () => {
     try {
       if (!recording) return discardVoice(voice);
-      const ok = await bridge!.audioControl(false, AudioInputSource.Glasses);
+      const ok = await closeMic();
+      recording = false;
       if (!ok) {
+        // The capture is over either way; the unconfirmed stop keeps every later open waiting for a confirmed one.
         discardVoice(voice);
-        status("마이크 중지를 확인하지 못했습니다. Even 앱에서 종료하세요.");
+        status(MIC_STOP_UNCONFIRMED);
+        wakeNotice(MIC_STOP_UNCONFIRMED);
         return;
       }
-      recording = false;
       wakeNotice("마이크 꺼짐 · 음성 처리 중");
       bytes = 0;
       if (!voice || discard || !current(version) || !active) return discardVoice(voice);
@@ -707,7 +792,24 @@ el("text").oninput = () => {
   controls();
   syncWake();
 };
-el("wake-enabled").onchange = syncWake;
+/** Saves an explicit choice; a failed write is said, since the next launch would then use the previous choice. */
+function savePreferences(): void {
+  void preferences
+    .save({
+      wake: el<HTMLInputElement>("wake-enabled").checked,
+      autoSend: el<HTMLInputElement>("auto-send").checked,
+    })
+    .then((ok) => {
+      if (ok === false)
+        status("설정을 저장하지 못했습니다. 이번 실행에는 적용되지만 다음 실행에서는 이전 설정이 쓰일 수 있습니다.");
+    });
+}
+el("wake-enabled").onchange = () => {
+  // The toggle is an explicit retry after an unconfirmed stop.
+  savePreferences();
+  syncWake(true);
+};
+el("auto-send").onchange = savePreferences;
 async function sendText(text: string, version: number, id: string): Promise<void> {
   if (!current(version) || !active) return;
   const replyRevision = history.revision;
@@ -929,7 +1031,8 @@ el("disconnect").onclick = () => {
 /** The G2 page left the glasses foreground or the host is exiting it: listening, capture and polling stop. */
 function pause(): void {
   active = false;
-  syncWake();
+  clearTimeout(livenessTimer);
+  syncWake(true);
   clearTimeout(pollTimer);
   for (const request of requests) request.abort();
   abortTranscriptions(() => true);
@@ -949,7 +1052,8 @@ function resume(): void {
   }
   // G2 may have dropped the page while it was in the background, so resend the current text once.
   g2.forget();
-  syncWake();
+  // Returning to G2 is an explicit retry of an unconfirmed stop.
+  syncWake(true);
   controls();
   void poll();
   renderDisplay();
@@ -961,9 +1065,11 @@ window.addEventListener("pagehide", (event) => {
   if (event.persisted) return;
   pageLoaded = false;
   pause();
+  status("페이지가 닫히거나 내려가 듣기, 녹음과 답변 확인을 멈췄습니다. 페이지가 다시 표시되면 이어집니다.");
 });
 window.addEventListener("pageshow", () => {
   pageLoaded = true;
+  if (!active && !exited) status("페이지가 다시 표시되어 듣기와 답변 확인을 이어갑니다.");
   resume();
 });
 // Outside the Even app the bridge never appears; say so instead of waiting silently.
@@ -976,6 +1082,16 @@ void (async () => {
   bridge = await waitForEvenAppBridge();
   clearTimeout(bridgeWait);
   controls();
+  // Read independently of G2 startup, so a slow read only delays Hey dots, never polling.
+  void preferences.restore().then((saved) => {
+    const choice = saved ?? UNKNOWN_PREFERENCES;
+    el<HTMLInputElement>("wake-enabled").checked = choice.wake;
+    el<HTMLInputElement>("auto-send").checked = choice.autoSend;
+    settingsLoaded = true;
+    if (!saved) status((settingsNote = SETTINGS_UNREAD));
+    controls();
+    syncWake();
+  });
   const result = await bridge.createStartUpPageContainer(
     new CreateStartUpPageContainer({
       containerTotalNum: 2,
@@ -1007,6 +1123,18 @@ void (async () => {
   active = pageLoaded;
   controls();
   bridge.onEvenHubEvent((event) => {
+    if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && (wakeMicOpen || recording)) {
+      // The first frame after an open, or after a quiet spell, is what shows G2 audio is arriving.
+      if (++micFrames === 1 || audioQuiet) {
+        audioQuiet = false;
+        wakeNotice(
+          wakeMicOpen
+            ? "마이크 켜짐 · 휴대폰에서 Hey dots 로컬 감지 중 · 감지 전 소리는 서버에 보내지 않습니다."
+            : "마이크 켜짐 · 수동 녹음 중",
+        );
+        watchAudio();
+      }
+    }
     if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && wakeMicOpen && wakeAllowed())
       wakeDetector?.append(event.audioEvent.audioPcm);
     if (event.audioEvent && event.audioEvent.source !== AudioInputSource.Phone && recordingWanted && recording) {
@@ -1028,7 +1156,12 @@ void (async () => {
       pause();
       exited = true;
       cancelRequests();
-      return;
+      // Terminal either way; the phone says which, so a device run can tell an abnormal exit from a confirmed one.
+      return status(
+        type === OsEventTypeList.ABNORMAL_EXIT_EVENT
+          ? "G2 앱이 비정상 종료되어 듣기, 녹음과 답변 확인을 멈췄습니다. Even 앱에서 다시 여세요."
+          : "G2에서 앱이 종료되어 듣기, 녹음과 답변 확인을 멈췄습니다. 다시 쓰려면 G2에서 앱을 여세요.",
+      );
     }
     if (step === "leave") {
       pause();
@@ -1074,7 +1207,10 @@ void (async () => {
     }
   }
   controls();
-  status(credentials ? "저장된 서버 연결을 사용합니다." : "G2 준비됨 · 서버 주소와 연결 코드를 입력하세요.");
+  status(
+    settingsNote ??
+      (credentials ? "저장된 서버 연결을 사용합니다." : "G2 준비됨 · 서버 주소와 연결 코드를 입력하세요."),
+  );
   syncWake();
   void poll();
 })().catch((e) => {

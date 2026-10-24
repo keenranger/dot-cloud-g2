@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WAKE_BLOCKED, canListen, finishWakeClip, wakeBlocker, type WakeConditions } from "./wake-gate.ts";
 const permitted: WakeConditions = {
+  settings: true,
   enabled: true,
   active: true,
   ready: true,
@@ -13,8 +14,15 @@ const permitted: WakeConditions = {
 };
 test("local listening requires the enabled setting, foreground app, initialized G2, pairing and a Soniox key", () => {
   assert.equal(canListen(permitted), true);
-  for (const flag of ["enabled", "active", "ready", "connected", "transcriber"] as const)
+  for (const flag of ["settings", "enabled", "active", "ready", "connected", "transcriber"] as const)
     assert.equal(canListen({ ...permitted, [flag]: false }), false, flag);
+});
+test("an unread saved choice outranks the page default, and quiet G2 audio is never a blocker", () => {
+  // The checkbox still shows the page default while the saved choice is read, so it says nothing yet.
+  assert.equal(wakeBlocker({ ...permitted, settings: false, enabled: true }), "settings");
+  // Missing frames are reported by the companion, never turned into a reason to stop listening.
+  assert.equal("audio" in WAKE_BLOCKED, false);
+  assert.match(WAKE_BLOCKED.settings, /설정/);
 });
 test("STT/send, manual recording and unsent review draft each prevent wake capture", () => {
   for (const flag of ["busy", "manual", "draft"] as const)

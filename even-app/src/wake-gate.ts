@@ -1,4 +1,6 @@
 export interface WakeConditions {
+  /** The saved Hey dots choice has been read, so `enabled` reflects the user and not the page default. */
+  settings: boolean;
   enabled: boolean;
   active: boolean;
   ready: boolean;
@@ -10,8 +12,18 @@ export interface WakeConditions {
   draft: boolean;
 }
 /** The first condition that keeps the microphone closed, in the order a user would resolve them; none means listening. */
-export type WakeBlocker = "enabled" | "active" | "ready" | "connected" | "transcriber" | "manual" | "busy" | "draft";
+export type WakeBlocker =
+  | "settings"
+  | "enabled"
+  | "active"
+  | "ready"
+  | "connected"
+  | "transcriber"
+  | "manual"
+  | "busy"
+  | "draft";
 export function wakeBlocker(state: WakeConditions): WakeBlocker | undefined {
+  if (!state.settings) return "settings";
   if (!state.enabled) return "enabled";
   if (!state.active) return "active";
   if (!state.ready) return "ready";
@@ -28,6 +40,7 @@ export function canListen(state: WakeConditions): boolean {
 }
 /** Why the microphone stays closed, so a default-on setting never looks like it is listening when it is not. */
 export const WAKE_BLOCKED: Record<WakeBlocker, string> = {
+  settings: "Hey dots 대기 · 저장된 설정을 불러오는 중입니다.",
   enabled: "Hey dots 꺼짐 · 마이크를 열지 않습니다.",
   active: "Hey dots 대기 · G2에서 앱이 열려 있을 때만 듣습니다.",
   ready: "Hey dots 대기 · G2 화면이 준비되면 마이크를 엽니다.",

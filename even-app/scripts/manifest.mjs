@@ -15,8 +15,8 @@ writeFileSync(
     {
       package_id: "app.mark.evendotscloud",
       edition: "202601",
-      name: "Dot Cloud",
-      version: "0.3.0",
+      name: "Lens MCP for G2",
+      version: "0.4.2",
       min_sdk_version: "0.0.16",
       entrypoint: "index.html",
       permissions: [
@@ -27,7 +27,7 @@ writeFileSync(
         },
         {
           name: "g2-microphone",
-          desc: "Record for up to 30 seconds through G2 hold or phone buttons. If you enable Hey dots, keep the microphone open for phone-local cue detection while the app is active; only post-cue speech is sent to Soniox for transcription.",
+          desc: "Record for up to 30 seconds through G2 hold or phone buttons. Hey dots is on by default and can be turned off: while the app is active, paired and has a Soniox key, the microphone stays open for phone-local cue detection; only post-cue speech is sent to Soniox for transcription.",
         },
       ],
       supported_languages: ["ko", "en"],

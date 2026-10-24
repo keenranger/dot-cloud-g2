@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canListen, finishWakeClip, type WakeConditions } from "./wake-gate.ts";
+import { WAKE_BLOCKED, canListen, finishWakeClip, wakeBlocker, type WakeConditions } from "./wake-gate.ts";
 const permitted: WakeConditions = {
   enabled: true,
   active: true,
@@ -11,7 +11,7 @@ const permitted: WakeConditions = {
   manual: false,
   draft: false,
 };
-test("local listening requires explicit opt-in, foreground app, initialized G2, pairing and a Soniox key", () => {
+test("local listening requires the enabled setting, foreground app, initialized G2, pairing and a Soniox key", () => {
   assert.equal(canListen(permitted), true);
   for (const flag of ["enabled", "active", "ready", "connected", "transcriber"] as const)
     assert.equal(canListen({ ...permitted, [flag]: false }), false, flag);
@@ -19,6 +19,20 @@ test("local listening requires explicit opt-in, foreground app, initialized G2, 
 test("STT/send, manual recording and unsent review draft each prevent wake capture", () => {
   for (const flag of ["busy", "manual", "draft"] as const)
     assert.equal(canListen({ ...permitted, [flag]: true }), false, flag);
+});
+test("default-on startup names the missing prerequisite instead of claiming a recording or draft pause", () => {
+  // As the companion starts: setting on, G2 not ready, not paired, no key yet.
+  const startup = { ...permitted, ready: false, connected: false, transcriber: false };
+  assert.equal(wakeBlocker(startup), "ready");
+  assert.equal(wakeBlocker({ ...startup, ready: true }), "connected");
+  assert.equal(wakeBlocker({ ...startup, ready: true, connected: true }), "transcriber");
+  assert.equal(wakeBlocker(permitted), undefined);
+  // Turning it off wins over every other condition, so the label always confirms the user's choice.
+  assert.equal(wakeBlocker({ ...startup, enabled: false, busy: true }), "enabled");
+  for (const blocker of ["enabled", "active", "ready", "connected", "transcriber"] as const)
+    assert.doesNotMatch(WAKE_BLOCKED[blocker], /녹음|처리|작성/, blocker);
+  assert.match(WAKE_BLOCKED.enabled, /꺼짐/);
+  assert.equal(new Set(Object.values(WAKE_BLOCKED)).size, Object.keys(WAKE_BLOCKED).length);
 });
 
 test("no-speech completion restores the reply without uploading", async () => {

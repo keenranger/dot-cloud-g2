@@ -9,7 +9,7 @@ Operational guide for agents working in this repository. Product and security de
 | Source repository | `origin` = `https://github.com/keenranger/dot-cloud-g2.git` (public), branch `main` |
 | Sites project | `appgprj_6adb099c2f588191a35d9749cda26f1f` (recorded in `.openai/hosting.json`) |
 | Relay public URL | `https://hey-dots-g2.keenranger.chatgpt.site` (MCP endpoint: `/mcp`) |
-| Even Hub app | package ID `app.mark.evendotscloud`, portal display name `even_dots`, manifest name `Dot Cloud` |
+| Even Hub app | package ID `app.mark.evendotscloud`, portal display name `even_dots`, manifest name `Lens MCP for G2` (builds through 0.4.0: `Dot Cloud`) |
 | Even Hub portal | `https://hub.evenrealities.com/hub/app.mark.evendotscloud/store-listing` |
 
 ## Publishing authorization
@@ -76,14 +76,22 @@ evenhub ls app.mark.evendotscloud --json
 - Prefer the CLI. The browser portal is a fallback only. It needs the ChatGPT browser extension with "Allow access to file URLs" granted by the user, and must not scrape or reuse auth state.
 - Installation of Private builds: in the Even app, Me > Apps > Private builds.
 
-### Snapshot (2026-10-23)
+### Historical snapshot (2026-10-23, before 0.3.0)
 
-- Remote `0.3.0` (build ID 119595): status Private, 7558524 bytes, no channels. Local `outputs/dot-cloud-0.3.0.ehpk` SHA-256 `79e85e6d03e08eb4b4f2b912f1195e110746740ffd2230f08840d0d622ccbb31`; `evenhub ls` size matches the local artifact.
-- Source: signed commit `4cd639ad390e17d8ea690b31fcb34cb70cb83f21` on `main` (phone-side Soniox streaming during recording).
-- Remote `0.2.0` (119579) and `0.1.0` (119524) are also Private. None is in review or public.
-- The relay is deployed at the public URL above from the existing Sites project; the latest Sites-workflow source commit is `3d586c7c4dc29bd99573464f0fa9169d526ad372` (`4cd639a` changes only `even-app/`, so no relay redeploy is needed for 0.3.0).
+- Remote `0.2.0`: status Private, 7558005 bytes, no channels. Local `outputs/dot-cloud-0.2.0.ehpk` SHA-256 `27e957b85808816e30754a85737af8d10ba7ead2f31bcb8912dc5b89929d2b59`.
+- Built from signed source commit `37580095fcff175784234845b58adce7967633f5` on `main`.
+- Remote `0.1.0` is also Private. Neither is in review or public.
 
-Re-read the remote state before acting; this snapshot will go stale.
+### Historical 0.3.0 upload (2026-10-23)
+
+This records the earlier 0.3.0 release only; it does not describe the current source or latest remote build.
+
+- Build ID 119595 was Private, 7,558,524 bytes, with no channels. Local `outputs/dot-cloud-0.3.0.ehpk` SHA-256: `79e85e6d03e08eb4b4f2b912f1195e110746740ffd2230f08840d0d622ccbb31`; the recorded `evenhub ls` size matched.
+- Source: signed commit `4cd639ad390e17d8ea690b31fcb34cb70cb83f21`, which added phone-side Soniox streaming during recording.
+- Builds 0.2.0 (119579) and 0.1.0 (119524) were also Private, with none in review or public at that time.
+- The relay was deployed through the existing Sites project at the URL above. Its recorded Sites-workflow source commit was `3d586c7c4dc29bd99573464f0fa9169d526ad372`; the 0.3.0 source change touched only `even-app/`.
+
+Re-read the remote state before acting; these historical snapshots are not current-state verification.
 
 ## Security and evidence
 

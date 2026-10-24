@@ -982,8 +982,12 @@ async function sendText(text: string, version: number, id: string, since = repli
     // Accepted around a deletion: it may have been deleted with the conversation, so no waiting state is claimed.
     const gone = "서버가 질문을 받았지만 그 사이 대화 기록이 삭제되어 이 질문도 지워졌을 수 있습니다.";
     status(gone);
-    // Running text the deletion left on G2 gives way to the same statement, never to "not sent".
-    if (captionHolds()) displayText(gone);
+    // Running text the deletion left on G2 gives way to a reply written after it, else to the same statement, never
+    // to "not sent". The phone keeps the statement either way.
+    if (captionHolds()) {
+      if (replyWaiting(since)) showSelectedReply();
+      else displayText(gone);
+    }
   }
   // A reply can arrive while the submission HTTP response is still in flight; a deletion or expiry is not one.
   else if (!replyWaiting(since)) {

@@ -1866,6 +1866,45 @@ test("an automatic POST answered after a deletion neither says not sent nor leav
   }
 });
 
+test("a reply written with a deletion during an automatic POST reaches G2 once the POST completes", async () => {
+  let settle;
+  const server = {
+    revision: 1,
+    messages: [msg("old", "삭제될 답변")],
+    post: () => new Promise((resolve) => (settle = resolve)),
+  };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    const socket = await manualCapture(h);
+    await release(h, socket);
+    assert.equal(server.posts.length, 1);
+    // One poll while the POST is pending observes the deletion and a single new reply together.
+    server.revision = 2;
+    server.messages = [msg("new", "삭제 후 새 답변")];
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "삭제 후 새 답변", "the phone shows the new reply");
+    assert.ok(!bodies(h).at(-1).includes("삭제 후 새 답변"), "G2 defers it behind the capture notice");
+    settle(Response.json({ status: "accepted" }));
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "삭제 후 새 답변", "the deferred reply comes back on G2");
+    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.match(h.get("status").textContent, /지워졌을 수 있습니다/, "the phone keeps the deletion warning");
+    assert.equal(h.get("text").value, "");
+    const writes = bodies(h).length;
+    for (let i = 0; i < 2; i++) await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "삭제 후 새 답변", "unchanged polls keep the reply on G2");
+    assert.ok(
+      !bodies(h)
+        .slice(writes)
+        .some((b) => b.includes("삭제될 답변") || b.includes("지워졌을 수 있습니다")),
+      "neither the deleted reply nor the warning takes G2 back",
+    );
+    assert.equal(server.posts.length, 1, "nothing is resent");
+  } finally {
+    h.restore();
+  }
+});
+
 test("an automatic POST refused with 410 says so on G2, keeps the transcript and resends with a new ID", async () => {
   const server = {
     revision: 1,

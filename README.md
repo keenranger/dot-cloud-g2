@@ -18,7 +18,7 @@ G2 display ← Even Hub companion ← authenticated message API ← durable repl
 
 Sites provides a public server, D1 storage, and native Sign in with ChatGPT. Each signed-in user has their own tenant identity from Sites-injected headers. Device records, pairing codes, utterances, subscriptions, and replies are scoped to that identity. Device requests use a separately issued bearer token; no browser cookie or shared Sites service-access token is copied into the companion.
 
-The companion includes optional phone-local `Hey dots` detection using packaged sherpa-onnx WASM keyword spotting and Silero VAD from the Dot Link reference. Listening is on by default in the companion, can be turned off there, and opens the G2 microphone only while the companion's G2 page is open, paired, has a Soniox key and has the G2 page ready. By app policy, a locked phone or a backgrounded Even app does not stop listening, manual G2 capture or replies, and only the G2 microphone is used; whether the Even app keeps the companion running while the phone is locked is not yet verified on a device. Only the post-cue command is sent to Soniox from the phone. Wake detection itself needs neither Live nor an inference API key. English cue pronunciation and Korean command transcription are separate concerns; real `Hey dots` recognition accuracy is not established by offline loading or silence tests.
+The companion includes optional phone-local `Hey dots` detection using packaged sherpa-onnx WASM keyword spotting and Silero VAD from the Dot Link reference. Listening is on by default in the companion, can be turned off there (the 0.5.0 candidate remembers an explicit OFF/ON choice; production 0.4.2 does not), and opens the G2 microphone only while the companion's G2 page is open, paired, has a Soniox key and has the G2 page ready. By app policy, a locked phone or a backgrounded Even app does not stop listening, manual G2 capture or replies, and only the G2 microphone is used; whether the Even app keeps the companion running while the phone is locked is not yet verified on a device. Only the post-cue command is sent to Soniox from the phone. Wake detection itself needs neither Live nor an inference API key. English cue pronunciation and Korean command transcription are separate concerns; real `Hey dots` recognition accuracy is not established by offline loading or silence tests.
 
 The server implements MCP events. A real Dot has reported an active subscription through the Sites plugin, but event delivery of a spoken utterance and the correlated reply have not been proven. The requested event-driven integration is not complete until an actual Dot subscribes, receives an event, and calls the reply tool. Polling the device response API does not replace that requirement.
 
@@ -53,7 +53,7 @@ Apply any later migration files in order. Hosted migrations are applied by the S
 - MCP capability: `mcp`, declared in the same manifest.
 - Public ingress allows each user to sign in and manage only their own connections. No single-user allowlist or account ID setup is required.
 - Speech transcription needs no Site configuration. Each user enters their own Soniox API key in the companion on their phone (see [Speech recognition key](#speech-recognition-key)). Do not configure a shared speech API key on the server, and never ask users to enter a key on the Site.
-- ChatGPT sign-in establishes identity; it does not supply speech API credentials or include API usage. The legacy server-side transcription adapter (OpenAI audio transcriptions) is not an enabled public service. `sttConfigured` in the status API reports only that legacy server setting; it says nothing about whether a phone has a Soniox key, which the server cannot observe.
+- ChatGPT sign-in establishes identity; it does not supply speech API credentials or include API usage. The legacy server-side transcription adapter (OpenAI audio transcriptions) is not an enabled public service: it fails closed because the runtime supplies no server credential, so `/api/device/transcribe` returns 503 before reading any audio body. `sttConfigured` in the status API reports only that legacy server setting; it says nothing about whether a phone has a Soniox key, which the server cannot observe.
 
 The public Site accepts non-cookie device bearer requests while management and MCP operations require the current user's trusted ChatGPT identity. Public ingress must not permit unauthenticated management or access to another user's records. No platform service-access token belongs in the companion.
 
@@ -85,7 +85,7 @@ See [the companion README](even-app/README.md) for SDK interaction and build det
 Transcription is processed in Soniox's cloud, called directly from the phone with the user's own [Soniox](https://soniox.com) account. The Site never receives, stores, or relays the key, and no server-side key setup is required.
 
 1. In the Soniox console, create an API key that has the real-time transcription permission. See [API key permissions](https://soniox.com/docs/guides/api-key-permissions).
-2. On the phone, open the G2 Bridge app in Even Hub, open its settings, and paste the key.
+2. On the phone, open the Lens MCP for G2 app in Even Hub, open its settings, and paste the key.
 3. By default the key is held in memory for the current app session only. Optionally choose to remember it, which keeps it in Even Hub app storage on that phone. The same settings let you clear or replace the key at any time.
 
 Security notes:
@@ -96,9 +96,21 @@ Security notes:
 
 ## Data and privacy
 
-The relay does not receive or persist raw audio. Audio is sent from the phone to Soniox under the user's own account and Soniox's policy. The legacy server-side transcription adapter remains disabled. Text utterances, replies, subscriptions, and device records persist in D1; this implementation does not yet offer automatic transcript deletion or a retention policy. Do not treat it as production-ready for sensitive conversations.
+The relay does not receive or persist raw audio. Audio is sent from the phone to Soniox under the user's own account and Soniox's policy. The legacy server-side transcription adapter remains disabled and fails closed before reading audio. Text utterances, replies, proactive agent messages, subscriptions, and device records persist in D1. Proactive messages sent with `send_message_to_g2` carry no device ID and are stored for, and delivered to, every paired device of that owner.
 
-Pairing codes and device tokens are stored as hashes. Callback signing secrets remain server-side. User management and MCP operations require trusted Sites identity and scope database operations to that user. Device APIs accept only their scoped bearer tokens. Registration, utterance submission, and speech calls have server-side rate limits. Device revocation is available on each user's dashboard and affects only their own devices.
+**Version status.** The production relay and the latest uploaded Even Hub build (0.4.2, Private) do not include the retention and deletion behavior below: in production, stored conversations have no retention period and no user-facing deletion, and can remain indefinitely. The behavior below exists only in the local 0.5.0 candidate. It is not deployed, its hosted D1 migration (`0003`) has not run, and the bounded corrected-source review found no actionable findings; hosted validation remains pending.
+
+Conversation retention and deletion in the 0.5.0 candidate (the owner approved this requirement):
+
+- **30-day read and delivery cutoff.** Every conversation read, delivery and retry is fenced by `createdAt` in UTC: a record created 30 days or more ago (`createdAt <= now - 30 days`) is no longer returned, delivered, retried or replied to, whether or not it has been physically removed. This covers utterances, replies, proactive messages, legacy rows and rows of revoked devices. A retry of an expired ID gets `410`.
+- **Owner erase.** The signed-in owner can erase all of their conversations immediately from the dashboard (same-origin request with Sites identity only; device tokens cannot call it). One transaction deletes the owner's utterances and messages, writes text-free tombstones (a timestamp only, no content) so that late retries of erased IDs are refused with `410`, and increments a conversation revision. The companion clears its cached replies when it sees the higher revision on its next active poll. Devices, pairing, subscriptions and rate-limit rows are not affected. Tombstones themselves fall under the 30-day cutoff.
+- **Physical cleanup is not live.** A scheduled daily purge at 03:00 Asia/Seoul is intended but is **not activated or published**. When activated, each run targets up to 20,000 rows through bounded, rate-limited maintenance tool calls (at most 20 rounds of 1,000 rows, with 41 SQL statements including rate limiting). Under that policy, physical removal after the 30-day cutoff can lag by up to 24 hours while the job is healthy; failed runs and backlogs beyond one run's capacity add further delay. No physical deletion on exactly day 30, and no automatic deletion today, is claimed.
+- **Outside the relay's reach.** Content already sent to ChatGPT (Dot) or Soniox, or already shown on the phone or G2, cannot be erased by the relay. Provider copies, infrastructure logs and backups are outside this guarantee and have not been audited.
+- Expired pairing, subscription and rate-limit rows become unusable but are not purged by a scheduled job.
+
+Do not treat this service as production-ready for sensitive conversations.
+
+Pairing codes and device tokens are stored as hashes. Callback signing secrets remain server-side. User management and MCP operations require trusted Sites identity and scope database operations to that user. Device APIs accept only their scoped bearer tokens. Registration, utterance submission, and speech calls have server-side rate limits. Device revocation is available on each user's dashboard and affects only their own devices. Revocation deletes the device's authentication record; it is not conversation deletion, and that device's past utterances and messages remain stored under the owner (until the owner erases them or, in the 0.5.0 candidate, they pass the 30-day cutoff).
 
 ## Acceptance gates
 
@@ -107,6 +119,7 @@ Pairing codes and device tokens are stored as hashes. Callback signing secrets r
 - Actual Dot event subscription: a real Dot has reported subscribed. Signed callback delivery of a spoken utterance and its correlated reply: unverified.
 - Real Korean audio transcription through phone-direct Soniox and its latency: unverified; requires a user-supplied key and an actual recording on the phone.
 - Full Mac-off voice round trip (speech, transcript, Dot reply, G2 display): unverified.
+- 0.5.0 candidate retention and owner erase: local tests only. The hosted D1 migration, a scheduled purge actually removing rows, the companion clearing its cache on a real G2 after an erase, and ChatGPT tool behavior after an erase are unverified. The daily purge schedule is not activated.
 - Physical G2 microphone, gestures, Hangul glyphs, and paging: unverified. A proactive native-MCP message from the root Codex development conversation was physically confirmed on G2 by the user; a cloud-Dot-initiated reply on a physical G2 has not been observed.
 
 No local check proves these external gates. The goal remains open until the requested real account/device round trip works.
@@ -119,3 +132,13 @@ No local check proves these external gates. The goal remains open until the requ
 - [OpenAI MCP events](https://developers.openai.com/plugins/build/mcp-events)
 - [OpenAI speech transcription](https://developers.openai.com/api/docs/guides/speech-to-text)
 - [Dot Link reference implementation](https://github.com/YusukeIt0/dot-link)
+
+## Local retention verification update
+
+Physical sweeps delete expired conversation content and atomically leave owner-scoped, text-free ID fences (identifiers and sweep timestamp only). These fences reject same-ID retries with `410` for 30 further days from the sweep, then expire without replacement. This is bounded retry protection, not a permanent ID guarantee.
+
+Each maintenance invocation targets at most 20,000 rows and uses at most 41 SQL statements including rate limiting. Fence insertion and later deletion add metadata storage and index writes; hosted D1 plan, quota, actual rows written and batch-result behavior remain unverified activation gates. Measure the first hosted sweep before activating the intended daily 03:00 Asia/Seoul cleanup. The schedule remains unactivated.
+
+Submission-time fallback cleanup is best-effort: failure logs only the constant, non-content warning `retention_fallback_sweep_failed` and does not block a fresh submission. Read and expiry fences still apply; insertion failures remain errors.
+
+Final parent checks passed: root tests 76/76, companion tests 98/98, root lint/typecheck/build, companion lint/typecheck:test/build, pinned wake-asset verification, and diff checks. The bounded independent corrected-source review closed the initial sweep-resurrection, callback-expiry and phone-expiry findings with no actionable findings. Tests use SQLite/D1 shims and fake host/provider boundaries; they do not establish hosted D1 or physical behavior. Hosted migration 0003, atomic batch behavior, deletion metadata, quota, schedule activation and real-device validation remain open.

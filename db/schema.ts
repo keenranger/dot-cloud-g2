@@ -18,5 +18,9 @@ export const relayRecords = sqliteTable(
     index("relay_pending_idx")
       .on(table.owner, sql`json_extract(${table.value}, '$.createdAt')`)
       .where(sql`${table.kind} = 'utterance' AND json_extract(${table.value}, '$.status') != 'replied'`),
+    // Global expiry sweep over conversation rows and their text-free deletion tombstones.
+    index("relay_retention_idx")
+      .on(sql`json_extract(${table.value}, '$.createdAt')`)
+      .where(sql`${table.kind} IN ('utterance','message','erased-utterance','erased-message')`),
   ],
 );

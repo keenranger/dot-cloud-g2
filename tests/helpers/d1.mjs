@@ -35,6 +35,11 @@ export function database() {
               return { results: statement.all(...args) };
             },
             async run() {
+              // Like D1, statements that yield rows report them in batch results.
+              if (/^\s*select\b|\breturning\b/i.test(sql)) {
+                const results = statement.all(...args);
+                return { results, meta: { changes: /^\s*select\b/i.test(sql) ? 0 : results.length } };
+              }
               return { meta: { changes: statement.run(...args).changes } };
             },
           };

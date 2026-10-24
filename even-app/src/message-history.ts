@@ -28,7 +28,7 @@ export class MessageHistory {
     const following = !old || this.index === this.items.length - 1;
     const known = new Set(this.items.map((item) => item.message_id));
     const additions = batch.filter((item) => {
-      if (known.has(item.message_id)) return false;
+      if (known.has(item.message_id) || this.expired(item)) return false;
       known.add(item.message_id);
       return true;
     });
@@ -50,9 +50,70 @@ export class MessageHistory {
   canShowSubmission(startRevision: number): boolean {
     return this.revision === startRevision;
   }
+  /** The owner conversation revision last applied; undefined until a relay response carries one. */
+  conversation: number | undefined;
+  /** Counts observed owner deletions, so an in-flight submission can tell one happened while it waited. */
+  erasures = 0;
+  /**
+   * Applies a poll's `conversation_revision` before its messages. A higher revision means the owner deleted the
+   * conversation, so every cached reply and the reading position go; a lower one belongs to a response older than one
+   * already applied, which must be dropped whole. Until the first valid revision, a response without one (a relay
+   * predating the field) keeps the append-only behavior; after it, such a response is dropped whole, since it could
+   * carry replies the owner has since deleted. The first revision above zero may follow a deletion made while this
+   * history was filled by a legacy relay, so it is treated as one; zero only sets the baseline. Deletion is never
+   * inferred from IDs missing in a capped batch.
+   */
+  observe(value: unknown): "current" | "erased" | "stale" | "invalid" {
+    const valid = typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+    if (this.conversation === undefined) {
+      if (!valid) return "current";
+      this.conversation = value;
+      if (value === 0) return "current";
+      // Only announce a deletion when something was shown; a submission in flight is fenced either way.
+      return this.erase() ? "erased" : "current";
+    }
+    if (!valid) return "invalid";
+    if (value < this.conversation) return "stale";
+    const erased = value > this.conversation && (this.erase(), true);
+    this.conversation = value;
+    return erased ? "erased" : "current";
+  }
+  /** Drops every reply and the reading position, and fences submissions in flight; reports whether any reply went. */
+  private erase(): boolean {
+    const had = this.items.length > 0;
+    this.items = [];
+    this.selectedId = undefined;
+    this.revision++;
+    this.erasures++;
+    return had;
+  }
+  /** The newest relay retention cutoff applied, in epoch ms; replies created at or before it have expired. */
+  private cutoff = -Infinity;
+  private expired(item: Reply): boolean {
+    const created = Date.parse(item.createdAt);
+    return !Number.isNaN(created) && created <= this.cutoff;
+  }
+  /**
+   * Applies a poll's `retention_cutoff` and drops the known replies it has expired. The cutoff never moves back, so an
+   * older response cannot bring an expired reply back, and a reply whose timestamp cannot be read is kept.
+   */
+  expire(value: unknown): boolean {
+    const at = typeof value === "string" ? Date.parse(value) : Number.NaN;
+    if (!Number.isNaN(at) && at > this.cutoff) this.cutoff = at;
+    const kept = this.items.filter((item) => !this.expired(item));
+    if (kept.length === this.items.length) return false;
+    this.items = kept;
+    // An expired reader position moves to the oldest reply still kept, which is nearest to it.
+    if (!this.items.some((item) => item.message_id === this.selectedId)) this.selectedId = this.items[0]?.message_id;
+    this.revision++;
+    return true;
+  }
+  /** Forgets everything, including the revision and cutoff baselines, for a new or removed connection. */
   clear(): void {
     this.items = [];
     this.selectedId = undefined;
+    this.conversation = undefined;
+    this.cutoff = -Infinity;
     this.revision++;
   }
 }

@@ -1,0 +1,1 @@
+CREATE INDEX `relay_retention_idx` ON `relay_records` (json_extract(`value`, '$.createdAt')) WHERE `kind` IN ('utterance','message','erased-utterance','erased-message');

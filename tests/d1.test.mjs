@@ -195,7 +195,8 @@ test("D1 retry candidate skips exhausted/backoff/in-flight items and pagination 
     assert.equal((await store.deliveryCandidate("alice", "device-one", 1000)).id, ids[23]);
     assert.equal(await store.deliveryCandidate("bob", "device-one", 1000), null);
     assert.equal((await store.deliveryCandidate("alice", "device-one", 2000)).id, ids[20]);
-    const relay = new Relay(store);
+    // These rows are dated from the epoch; read them with a clock inside the retention window.
+    const relay = new Relay(store, undefined, () => 25_000);
     const one = await relay.pendingPage("alice");
     const two = await relay.pendingPage("alice", one.next_cursor);
     const three = await relay.pendingPage("alice", two.next_cursor);

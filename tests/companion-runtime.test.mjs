@@ -634,3 +634,503 @@ test("a send in flight across a G2 foreground exit keeps the typed text, and res
     h.restore();
   }
 });
+
+/** A relay fake whose snapshot, revision and submission answers the test changes between polls. */
+function relay(state) {
+  state.posts = [];
+  return (_url, init) => {
+    if (init?.method === "POST") {
+      state.posts.push(JSON.parse(init.body));
+      return state.post ? state.post(init) : Promise.resolve(Response.json({ status: "stored" }));
+    }
+    const body = { messages: state.messages };
+    if (state.revision !== undefined) body.conversation_revision = state.revision;
+    return Promise.resolve(Response.json(body));
+  };
+}
+const msg = (id, text) => ({ message_id: id, text, createdAt: "2026-10-23T00:00:00Z" });
+const bodyWrites = (h) => h.writes.filter((w) => w.containerID === 1).map((w) => w.content);
+const headerWrites = (h) => h.writes.filter((w) => w.containerID === 2).map((w) => w.content);
+
+test("an owner deletion clears old replies on the phone and G2, keeps the draft, rejects older snapshots and shows new replies", async () => {
+  const server = { revision: 3, messages: [msg("old-1", "삭제 전 답변 하나"), msg("old-2", "삭제 전 답변 둘")] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    assert.equal(h.get("reply").textContent, "삭제 전 답변 둘");
+    assert.equal(bodyWrites(h).at(-1), "삭제 전 답변 둘");
+    h.get("prev-message").onclick();
+    assert.equal(h.get("reply").textContent, "삭제 전 답변 하나", "the reader moved back");
+    h.get("text").value = "삭제 후에도 남을 초안";
+    h.get("text").oninput();
+    await h.flush();
+    const audio = h.audio.length;
+    const writesBefore = h.storageWrites.length;
+    // Same revision with a capped batch that omits an ID is not a deletion.
+    server.messages = [msg("old-2", "삭제 전 답변 둘")];
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "1 / 2개 메시지");
+    // The owner deleted the conversation.
+    server.revision = 4;
+    server.messages = [];
+    await h.fire(2500);
+    assert.match(h.get("reply").textContent, /대화 기록이 삭제/);
+    assert.match(h.get("status").textContent, /대화 기록이 삭제/);
+    assert.match(bodyWrites(h).at(-1), /대화 기록이 삭제/, "G2 no longer shows the deleted reply");
+    assert.doesNotMatch(headerWrites(h).at(-1), /답변 \d/, "no stale position in the G2 header");
+    assert.equal(h.get("message-position").textContent, "아직 받은 메시지가 없습니다.");
+    assert.equal(h.get("prev-message").disabled, true);
+    assert.equal(h.get("next-message").disabled, true);
+    assert.equal(h.get("text").value, "삭제 후에도 남을 초안", "unsent typed text stays");
+    assert.equal(h.storageWrites.length, writesBefore, "pairing, key and preferences are not touched");
+    assert.equal(h.audio.length, audio, "the microphone is neither opened nor closed by a deletion");
+    // A snapshot read before the deletion cannot bring the replies back.
+    server.revision = 3;
+    server.messages = [msg("old-1", "삭제 전 답변 하나"), msg("old-2", "삭제 전 답변 둘")];
+    const bodies = bodyWrites(h).length;
+    await h.fire(2500);
+    assert.match(h.get("reply").textContent, /대화 기록이 삭제/);
+    assert.equal(h.get("message-position").textContent, "아직 받은 메시지가 없습니다.");
+    assert.equal(bodyWrites(h).length, bodies, "the stale snapshot writes nothing to G2");
+    // A reply written after the deletion is shown and followed as usual.
+    server.revision = 4;
+    server.messages = [msg("new-1", "삭제 후 새 답변")];
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "삭제 후 새 답변");
+    assert.equal(bodyWrites(h).at(-1), "삭제 후 새 답변");
+    assert.match(headerWrites(h).at(-1), /답변 1\/1/);
+    // Once a revision is known, a response without one is dropped whole, and the baseline still refuses older ones.
+    server.revision = undefined;
+    server.messages = [msg("old-1", "삭제 전 답변 하나"), msg("new-1", "삭제 후 새 답변")];
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "1 / 1개 메시지");
+    server.revision = 3;
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "1 / 1개 메시지");
+    assert.equal(h.get("text").value, "삭제 후에도 남을 초안");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a submission in flight across a deletion neither redisplays old history nor claims a waiting state, and is not resent", async () => {
+  let settle;
+  const server = {
+    revision: 1,
+    messages: [msg("old-1", "삭제될 답변")],
+    post: () => new Promise((resolve) => (settle = resolve)),
+  };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    h.get("text").value = "삭제 직전 질문";
+    h.get("text").oninput();
+    h.get("send").onclick();
+    await h.flush();
+    assert.equal(server.posts.length, 1);
+    server.revision = 2;
+    server.messages = [];
+    await h.fire(2500);
+    assert.match(bodyWrites(h).at(-1), /대화 기록이 삭제/);
+    settle(Response.json({ status: "accepted" }));
+    await h.flush();
+    assert.match(h.get("status").textContent, /지워졌을 수 있습니다/);
+    assert.match(h.get("reply").textContent, /대화 기록이 삭제/, "the old reply is not restored");
+    assert.match(bodyWrites(h).at(-1), /대화 기록이 삭제/, "no waiting notice replaces the deletion notice");
+    assert.ok(
+      !bodyWrites(h)
+        .slice(-1)
+        .some((b) => b.includes("삭제될 답변")),
+    );
+    assert.equal(h.get("text").value, "", "the relay accepted the text");
+    await h.fire(2500);
+    assert.equal(server.posts.length, 1, "nothing is resent");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a 410 for a deleted utterance ID is said plainly, never replayed, and a deliberate resend uses a new ID", async () => {
+  const server = {
+    revision: 1,
+    messages: [],
+    post: () => Promise.resolve(Response.json({ error: "Utterance was deleted" }, { status: 410 })),
+  };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    h.get("text").value = "지워진 질문";
+    h.get("text").oninput();
+    h.get("send").onclick();
+    await h.flush();
+    assert.match(h.get("status").textContent, /서버가 이 질문을 받지 않았습니다/);
+    assert.match(h.get("status").textContent, /자동으로 다시 보내지 않으며/);
+    assert.equal(h.get("text").value, "지워진 질문", "the typed text stays");
+    await h.fire(2500);
+    await h.fire(2500);
+    assert.equal(server.posts.length, 1, "no automatic replay");
+    server.post = undefined;
+    h.get("send").onclick();
+    await h.flush();
+    assert.equal(server.posts.length, 2);
+    assert.equal(server.posts[1].text, "지워진 질문");
+    assert.notEqual(server.posts[1].id, server.posts[0].id, "the resend is a new utterance");
+    assert.equal(h.get("text").value, "");
+    // An automatically sent transcript refused with 410 is kept in the field under a fresh ID as well.
+    server.post = () => Promise.resolve(Response.json({ error: "Utterance expired" }, { status: 410 }));
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    await h.event(EVENT.RELEASE, "textEvent");
+    h.sockets.at(-1).reply({ tokens: [{ text: "만료된 음성 질문", is_final: true }], finished: true });
+    await h.flush();
+    assert.equal(server.posts.length, 3);
+    assert.equal(h.get("text").value, "만료된 음성 질문");
+    assert.match(h.get("status").textContent, /서버가 이 질문을 받지 않았습니다/);
+    await h.fire(2500);
+    assert.equal(server.posts.length, 3, "the voice utterance is not replayed");
+    server.post = undefined;
+    h.get("send").onclick();
+    await h.flush();
+    assert.equal(server.posts.length, 4);
+    assert.notEqual(server.posts[3].id, server.posts[2].id);
+    assertNoConcurrentOpen(h.audio);
+  } finally {
+    h.restore();
+  }
+});
+
+test("replies past the relay retention cutoff leave the phone and G2, and an older cutoff cannot bring them back", async () => {
+  const day = (d) => `2026-10-${String(d).padStart(2, "0")}T00:00:00.000Z`;
+  const server = {
+    revision: 1,
+    retention: day(1),
+    messages: [
+      { message_id: "m-2", text: "열흘 전 답변", createdAt: day(2) },
+      { message_id: "m-legacy", text: "시각 없는 답변", createdAt: "" },
+      { message_id: "m-5", text: "닷새 전 답변", createdAt: day(5) },
+    ],
+  };
+  const fetch = relay(server);
+  const h = await boot({
+    storage: ready,
+    fetch: async (url, init) => {
+      const response = await fetch(url, init);
+      if (init?.method === "POST") return response;
+      return Response.json({ ...(await response.json()), retention_cutoff: server.retention });
+    },
+  });
+  try {
+    h.get("prev-message").onclick();
+    h.get("prev-message").onclick();
+    assert.equal(h.get("reply").textContent, "열흘 전 답변", "the reader is on the oldest reply");
+    h.get("text").value = "보관 만료와 무관한 초안";
+    h.get("text").oninput();
+    await h.flush();
+    // The relay no longer returns the expired reply, and the companion drops its cached copy.
+    server.retention = day(3);
+    server.messages = server.messages.slice(1);
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "1 / 2개 메시지");
+    assert.equal(
+      h.get("reply").textContent,
+      "시각 없는 답변",
+      "an unreadable timestamp is kept and becomes the reader",
+    );
+    assert.equal(bodyWrites(h).at(-1), "시각 없는 답변", "G2 no longer shows the expired reply");
+    assert.match(h.get("status").textContent, /보관 기간이 지난 답변/);
+    // A response carrying an older cutoff and the expired reply cannot restore it.
+    server.retention = day(1);
+    server.messages = [{ message_id: "m-2", text: "열흘 전 답변", createdAt: day(2) }, ...server.messages];
+    const bodies = bodyWrites(h).length;
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "1 / 2개 메시지");
+    assert.ok(!bodyWrites(h).slice(bodies).includes("열흘 전 답변"));
+    // A reader on a newer reply that expires later moves to the oldest reply still kept.
+    h.get("next-message").onclick();
+    assert.equal(h.get("reply").textContent, "닷새 전 답변");
+    server.retention = day(6);
+    server.messages = [{ message_id: "m-legacy", text: "시각 없는 답변", createdAt: "" }];
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "시각 없는 답변");
+    assert.equal(h.get("text").value, "보관 만료와 무관한 초안", "unsent typed text stays");
+  } finally {
+    h.restore();
+  }
+});
+
+test("when the only reply on screen expires, the phone and G2 say so instead of keeping it", async () => {
+  const server = {
+    revision: 1,
+    messages: [{ message_id: "m-1", text: "곧 만료될 답변", createdAt: "2026-09-25T00:00:00.000Z" }],
+  };
+  let retention = "2026-09-24T00:00:00.000Z";
+  const fetch = relay(server);
+  const h = await boot({
+    storage: ready,
+    fetch: async (url, init) =>
+      Response.json({ ...(await (await fetch(url, init)).json()), retention_cutoff: retention }),
+  });
+  try {
+    assert.equal(bodyWrites(h).at(-1), "곧 만료될 답변");
+    retention = "2026-09-25T00:00:00.000Z";
+    server.messages = [];
+    await h.fire(2500);
+    assert.match(h.get("reply").textContent, /보관 기간이 지난 답변/);
+    assert.match(bodyWrites(h).at(-1), /보관 기간이 지난 답변/);
+    assert.equal(h.get("message-position").textContent, "아직 받은 메시지가 없습니다.");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a reply expiring while G2 shows a waiting notice leaves the phone, and the notice stays on G2", async () => {
+  const server = {
+    revision: 1,
+    messages: [{ message_id: "m-1", text: "대기 중 만료될 답변", createdAt: "2026-09-25T00:00:00.000Z" }],
+  };
+  let retention = "2026-09-24T00:00:00.000Z";
+  const fetch = relay(server);
+  const h = await boot({
+    storage: ready,
+    fetch: async (url, init) => {
+      const response = await fetch(url, init);
+      if (init?.method === "POST") return response;
+      return Response.json({ ...(await response.json()), retention_cutoff: retention });
+    },
+  });
+  try {
+    assert.equal(h.get("reply").textContent, "대기 중 만료될 답변");
+    h.get("text").value = "새 질문";
+    h.get("text").oninput();
+    h.get("send").onclick();
+    await h.flush();
+    const notice = bodyWrites(h).at(-1);
+    assert.match(notice, /서버에 저장됨/, "G2 waits for the answer to the new question");
+    h.get("text").value = "만료와 무관한 초안";
+    h.get("text").oninput();
+    await h.flush();
+    const bodies = bodyWrites(h).length;
+    retention = "2026-09-25T00:00:00.000Z";
+    server.messages = [];
+    await h.fire(2500);
+    assert.match(h.get("reply").textContent, /보관 기간이 지난 답변/, "the phone no longer shows the expired reply");
+    assert.deepEqual(bodyWrites(h).slice(bodies), [], "the waiting notice is not rewritten");
+    assert.equal(bodyWrites(h).at(-1), notice);
+    assert.equal(h.get("message-position").textContent, "아직 받은 메시지가 없습니다.");
+    assert.equal(h.get("text").value, "만료와 무관한 초안", "unsent typed text stays");
+    // An older cutoff cannot bring the reply back to the phone.
+    retention = "2026-09-24T00:00:00.000Z";
+    server.messages = [{ message_id: "m-1", text: "대기 중 만료될 답변", createdAt: "2026-09-25T00:00:00.000Z" }];
+    await h.fire(2500);
+    assert.match(h.get("reply").textContent, /보관 기간이 지난 답변/);
+    assert.ok(!bodyWrites(h).includes("대기 중 만료될 답변", bodies));
+  } finally {
+    h.restore();
+  }
+});
+
+test("expiry alone is not a reply: a waiting notice stays on G2 while the phone moves to a kept reply", async () => {
+  const day = (d) => `2026-10-${String(d).padStart(2, "0")}T00:00:00.000Z`;
+  const server = {
+    revision: 1,
+    messages: [
+      { message_id: "m-2", text: "먼저 만료될 답변", createdAt: day(2) },
+      { message_id: "m-5", text: "남을 답변", createdAt: day(5) },
+    ],
+  };
+  let retention = day(1);
+  const fetch = relay(server);
+  const h = await boot({
+    storage: ready,
+    fetch: async (url, init) => {
+      const response = await fetch(url, init);
+      if (init?.method === "POST") return response;
+      return Response.json({ ...(await response.json()), retention_cutoff: retention });
+    },
+  });
+  try {
+    h.get("prev-message").onclick();
+    assert.equal(h.get("reply").textContent, "먼저 만료될 답변");
+    h.get("text").value = "새 질문";
+    h.get("text").oninput();
+    h.get("send").onclick();
+    await h.flush();
+    const notice = bodyWrites(h).at(-1);
+    assert.match(notice, /서버에 저장됨/);
+    const bodies = bodyWrites(h).length;
+    retention = day(3);
+    server.messages = server.messages.slice(1);
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "남을 답변");
+    assert.deepEqual(bodyWrites(h).slice(bodies), [], "the waiting notice is not replaced");
+    assert.doesNotMatch(h.get("status").textContent, /답변 수신/, "no reply is claimed");
+    // The answer that does arrive still replaces the waiting notice; the reader was on the newest kept reply.
+    server.messages = [...server.messages, { message_id: "m-9", text: "새 질문의 답변", createdAt: day(9) }];
+    await h.fire(2500);
+    assert.equal(bodyWrites(h).at(-1), "새 질문의 답변");
+    assert.equal(h.get("reply").textContent, "새 질문의 답변");
+    assert.match(h.get("status").textContent, /답변 수신/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a reply expiring during a capture moves the phone to a kept reply while the capture notice stays on G2", async () => {
+  const day = (d) => `2026-10-${String(d).padStart(2, "0")}T00:00:00.000Z`;
+  const server = {
+    revision: 1,
+    messages: [
+      { message_id: "m-2", text: "먼저 만료될 답변", createdAt: day(2) },
+      { message_id: "m-5", text: "남을 답변", createdAt: day(5) },
+    ],
+  };
+  let retention = day(1);
+  const fetch = relay(server);
+  const h = await boot({
+    storage: ready,
+    fetch: async (url, init) => {
+      const response = await fetch(url, init);
+      if (init?.method === "POST") return response;
+      return Response.json({ ...(await response.json()), retention_cutoff: retention });
+    },
+  });
+  try {
+    h.get("prev-message").onclick();
+    assert.equal(h.get("reply").textContent, "먼저 만료될 답변");
+    await h.event(EVENT.LONG_PRESS, "textEvent");
+    await h.frame();
+    assert.match(h.get("status").textContent, /녹음 중/);
+    const notice = bodyWrites(h).at(-1);
+    assert.match(notice, /녹음 중/);
+    const bodies = bodyWrites(h).length;
+    const audio = h.audio.length;
+    retention = day(3);
+    server.messages = server.messages.slice(1);
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "남을 답변", "the phone moves to the reply still kept");
+    assert.equal(h.get("message-position").textContent, "1 / 1개 메시지");
+    assert.deepEqual(bodyWrites(h).slice(bodies), [], "the capture notice is not replaced");
+    assert.equal(h.audio.length, audio, "the microphone is left alone");
+    assert.match(h.get("wake-status").textContent, /수동 녹음 중/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("replies cached from a legacy relay are cleared when the upgraded relay first reports a deletion", async () => {
+  const server = { messages: [msg("legacy-1", "업그레이드 전 답변")] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    assert.equal(h.get("reply").textContent, "업그레이드 전 답변");
+    h.get("text").value = "업그레이드 후에도 남을 초안";
+    h.get("text").oninput();
+    await h.flush();
+    const audio = h.audio.length;
+    const writesBefore = h.storageWrites.length;
+    // The owner deleted the conversation while the relay was being upgraded; the first revision is above zero.
+    server.revision = 1;
+    server.messages = [];
+    await h.fire(2500);
+    assert.match(h.get("reply").textContent, /대화 기록이 삭제/);
+    assert.match(bodyWrites(h).at(-1), /대화 기록이 삭제/, "G2 no longer shows the legacy reply");
+    assert.equal(h.get("message-position").textContent, "아직 받은 메시지가 없습니다.");
+    assert.equal(h.get("text").value, "업그레이드 후에도 남을 초안");
+    assert.equal(h.storageWrites.length, writesBefore);
+    assert.equal(h.audio.length, audio);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a first revision of zero keeps replies cached from a legacy relay", async () => {
+  const server = { messages: [msg("legacy-1", "업그레이드 전 답변")] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    server.revision = 0;
+    server.messages = [msg("legacy-1", "업그레이드 전 답변"), msg("new-1", "업그레이드 후 답변")];
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "2 / 2개 메시지");
+    assert.equal(h.get("reply").textContent, "업그레이드 후 답변");
+    assert.doesNotMatch(h.get("status").textContent, /삭제/, "no deletion is claimed");
+  } finally {
+    h.restore();
+  }
+});
+
+test("after a deletion, a response with a missing or invalid revision never brings old replies back", async () => {
+  const server = { revision: 1, messages: [msg("old-1", "삭제 전 답변")] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    server.revision = 2;
+    server.messages = [];
+    await h.fire(2500);
+    assert.match(h.get("reply").textContent, /대화 기록이 삭제/);
+    const bodies = bodyWrites(h).length;
+    for (const revision of [undefined, "3", -1, 2.5, null]) {
+      server.revision = revision;
+      server.messages = [msg("old-1", "삭제 전 답변")];
+      await h.fire(2500);
+      assert.equal(h.get("message-position").textContent, "아직 받은 메시지가 없습니다.", `revision ${revision}`);
+      assert.match(h.get("reply").textContent, /대화 기록이 삭제/);
+      assert.match(h.get("status").textContent, /표시하지 않았습니다/, "the dropped response is reported");
+    }
+    assert.equal(bodyWrites(h).length, bodies, "nothing old is written to G2");
+    server.revision = 2;
+    server.messages = [msg("new-1", "삭제 후 새 답변")];
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "삭제 후 새 답변");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a submission in flight when the upgraded relay first reports a deletion claims no waiting state", async () => {
+  for (const messages of [[msg("legacy-1", "업그레이드 전 답변")], []]) {
+    let settle;
+    const server = { messages, post: () => new Promise((resolve) => (settle = resolve)) };
+    const h = await boot({ storage: ready, fetch: relay(server) });
+    try {
+      h.get("text").value = "업그레이드 중 질문";
+      h.get("text").oninput();
+      h.get("send").onclick();
+      await h.flush();
+      assert.equal(server.posts.length, 1);
+      server.revision = 3;
+      server.messages = [];
+      await h.fire(2500);
+      const bodies = bodyWrites(h).length;
+      settle(Response.json({ status: "accepted" }));
+      await h.flush();
+      assert.match(h.get("status").textContent, /지워졌을 수 있습니다/);
+      assert.equal(bodyWrites(h).length, bodies, "no waiting notice and no old reply reach G2");
+      assert.doesNotMatch(h.get("reply").textContent, /업그레이드 전 답변/);
+      await h.fire(2500);
+      assert.equal(server.posts.length, 1, "nothing is resent");
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("a relay that never reports a revision keeps the append-only behavior", async () => {
+  const server = { messages: [msg("a", "첫 답변")], post: undefined };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    server.messages = [msg("b", "둘째 답변")];
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "2 / 2개 메시지");
+    assert.equal(h.get("reply").textContent, "둘째 답변");
+    server.messages = [];
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "2 / 2개 메시지", "an empty batch is not a deletion");
+    h.get("text").value = "레거시 질문";
+    h.get("text").oninput();
+    h.get("send").onclick();
+    await h.flush();
+    assert.equal(server.posts.length, 1);
+    assert.equal(h.get("text").value, "");
+    server.messages = [msg("c", "셋째 답변")];
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "셋째 답변");
+    assert.doesNotMatch(h.get("status").textContent, /삭제|표시하지 않았습니다/);
+  } finally {
+    h.restore();
+  }
+});

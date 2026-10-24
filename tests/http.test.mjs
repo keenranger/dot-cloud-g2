@@ -33,6 +33,7 @@ const utterances = await import("../app/api/device/utterances/route.ts");
 const messages = await import("../app/api/device/messages/route.ts");
 const status = await import("../app/api/status/route.ts");
 const revoke = await import("../app/api/devices/revoke/route.ts");
+const conversations = await import("../app/api/conversations/delete/route.ts");
 const transcribe = await import("../app/api/device/transcribe/route.ts");
 const mcp = await import("../app/mcp/route.ts");
 
@@ -304,4 +305,127 @@ test("get_status reports unknown phone key and does not claim speech readiness",
   assert.equal(value.transcriptionMode, "phone_direct_soniox");
   assert.equal(value.phoneKeyConfigured, null);
   assert(!/soniox_api_key|apiKey|audio/i.test(JSON.stringify(value)));
+});
+
+test("conversation deletion is same-origin Sites owner only, strict, and ignores body owner spoofing", async (t) => {
+  const db = database();
+  globalThis.__relayTestEnv.DB = db;
+  t.after(() => db.sqlite.close());
+  const alice = await provision("alice");
+  const bob = await provision("bob");
+  for (const [paired, text] of [
+    [alice, "alice 질문"],
+    [bob, "bob 질문"],
+  ])
+    assert.equal(
+      (await utterances.POST(deviceRequest(paired.token, "/api/device/utterances", { id: randomUUID(), text }))).status,
+      200,
+    );
+  const initial = await (await messages.GET(deviceRequest(alice.token, "/api/device/messages"))).json();
+  assert.deepEqual(Object.keys(initial), ["messages", "conversation_revision", "retention_cutoff"]);
+  assert.deepEqual(initial.messages, []);
+  assert.equal(initial.conversation_revision, 0);
+  assert.equal(new Date(initial.retention_cutoff).toISOString(), initial.retention_cutoff);
+  const remove = (request) => conversations.POST(request);
+  assert.equal(
+    (await remove(ownerRequest("alice", "/api/conversations/delete", { all: true }, { Origin: "https://evil.test" })))
+      .status,
+    403,
+  );
+  assert.equal(
+    (
+      await remove(
+        new Request("https://relay.test/api/conversations/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Origin: "https://relay.test" },
+          body: JSON.stringify({ all: true }),
+        }),
+      )
+    ).status,
+    401,
+  );
+  assert.equal((await remove(ownerRequest("alice", "/api/conversations/delete", {}))).status, 400);
+  assert.equal(
+    (await remove(ownerRequest("alice", "/api/conversations/delete", { all: true, owner: "bob" }))).status,
+    400,
+  );
+  assert.equal(
+    (
+      await remove(
+        deviceRequest(alice.token, "/api/conversations/delete", { all: true }, { Origin: "https://relay.test" }),
+      )
+    ).status,
+    401,
+  );
+  const deleted = await remove(
+    ownerRequest("alice", "/api/conversations/delete", { all: true }, { "x-owner-id": "bob" }),
+  );
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(await deleted.json(), { deleted: true, utterances: 1, messages: 0, conversation_revision: 1 });
+  assert.equal((await (await status.GET(ownerRequest("alice", "/api/status"))).json()).pendingCount, 0);
+  assert.equal((await (await status.GET(ownerRequest("bob", "/api/status"))).json()).pendingCount, 1);
+  assert.equal((await (await status.GET(ownerRequest("alice", "/api/status"))).json()).deviceCount, 1);
+  assert.equal(
+    (await (await messages.GET(deviceRequest(alice.token, "/api/device/messages"))).json()).conversation_revision,
+    1,
+  );
+  assert.equal(
+    (await (await messages.GET(deviceRequest(bob.token, "/api/device/messages"))).json()).conversation_revision,
+    0,
+  );
+});
+
+test("MCP retention tool is fixed policy, counts only, and rate limited per caller", async (t) => {
+  const db = database();
+  globalThis.__relayTestEnv.DB = db;
+  t.after(() => db.sqlite.close());
+  db.sqlite
+    .prepare("INSERT INTO relay_records (owner,kind,id,value,expires_at) VALUES ('alice','message','old',?,NULL)")
+    .run(JSON.stringify({ text: "오래된 비밀", createdAt: "2020-01-01T00:00:00.000Z" }));
+  const listed = await rpc("erin", "tools/list", {});
+  const definition = listed.result.tools.find((item) => item.name === "enforce_conversation_retention");
+  assert.deepEqual(definition.inputSchema.properties, {});
+  assert.equal(definition.inputSchema.additionalProperties, false);
+  const rejected = await tool("erin", "enforce_conversation_retention", { owner: "alice", cutoff: "2030-01-01" });
+  assert.equal(rejected.isError, true);
+  const text = (await tool("erin", "enforce_conversation_retention")).content[0].text;
+  assert(!text.includes("비밀") && !text.includes("alice"));
+  const result = JSON.parse(text);
+  assert.equal(result.deleted, 1);
+  assert.equal(result.more, false);
+  assert.equal(result.retentionDays, 30);
+  assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM relay_records WHERE kind = 'message'").get().n, 0);
+  for (let n = 0; n < 5; n++) assert(!(await tool("erin", "enforce_conversation_retention")).isError);
+  const limited = await tool("erin", "enforce_conversation_retention");
+  assert.equal(limited.isError, true);
+  assert.match(limited.content[0].text, /Rate limit/);
+});
+
+test("one MCP retention call stays within the D1 per-invocation query budget at its 20,000-row bound", async (t) => {
+  const db = database();
+  globalThis.__relayTestEnv.DB = db;
+  t.after(() => db.sqlite.close());
+  const insert = db.sqlite.prepare("INSERT INTO relay_records (owner,kind,id,value,expires_at) VALUES (?,?,?,?,NULL)");
+  db.sqlite.exec("BEGIN");
+  for (let n = 0; n < 20_500; n++)
+    insert.run(
+      `owner${n % 5}`,
+      "message",
+      `m${n}`,
+      JSON.stringify({ text: "x", createdAt: "2020-01-01T00:00:00.000Z" }),
+    );
+  db.sqlite.exec("COMMIT");
+  const prepare = db.prepare.bind(db);
+  let statements = 0;
+  db.prepare = (sql) => {
+    statements++;
+    return prepare(sql);
+  };
+  const first = JSON.parse((await tool("frank", "enforce_conversation_retention")).content[0].text);
+  // Rate-limit upsert plus 20 bounded fence + delete batches; D1 Free allows 50 queries per Worker invocation.
+  assert.equal(statements, 41);
+  assert.deepEqual([first.deleted, first.more], [20_000, true]);
+  statements = 0;
+  const second = JSON.parse((await tool("frank", "enforce_conversation_retention")).content[0].text);
+  assert.deepEqual([second.deleted, second.more, statements], [500, false, 3]);
 });

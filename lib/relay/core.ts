@@ -18,11 +18,15 @@ export class CallbackEndpointError extends RelayError {
 export type RecordValue = { owner: string; kind: string; id: string; value: string; expires_at: number | null };
 export interface Store {
   get(owner: string, kind: string, id: string): Promise<RecordValue | null>;
-  list(owner: string, kind: string, deviceId?: string): Promise<RecordValue[]>;
-  count(owner: string, kind: string): Promise<number>;
-  deliveryCandidate(owner: string, deviceId: string, now: number): Promise<RecordValue | null>;
-  pendingPage(owner: string, after?: { createdAt: string; id: string }): Promise<RecordValue[]>;
+  list(owner: string, kind: string, deviceId?: string, cutoff?: string): Promise<RecordValue[]>;
+  count(owner: string, kind: string, cutoff?: string): Promise<number>;
+  deliveryCandidate(owner: string, deviceId: string, now: number, cutoff?: string): Promise<RecordValue | null>;
+  pendingPage(owner: string, after?: { createdAt: string; id: string }, cutoff?: string): Promise<RecordValue[]>;
   insert(record: RecordValue): Promise<boolean>;
+  insertUnlessErased(record: RecordValue): Promise<boolean>;
+  eraseConversations(owner: string, at: string): Promise<{ utterances: number; messages: number; revision: number }>;
+  pollSnapshot(owner: string, deviceId: string, cutoff: string): Promise<{ revision: number; messages: RecordValue[] }>;
+  sweepExpired(cutoff: string, limit: number, at: string): Promise<number>;
   put(record: RecordValue): Promise<void>;
   compareAndSwap(record: RecordValue, previous: string): Promise<boolean>;
   writeReply(record: RecordValue, previous: string, message: RecordValue): Promise<boolean>;
@@ -49,6 +53,13 @@ type DeliveryOutcome = {
 };
 // MCP Events: do not retry deliveries that return 410 or 413.
 const noRetry = Number.MAX_SAFE_INTEGER;
+// Conversation records are unavailable once 30 days old, measured from their server-assigned UTC createdAt.
+const RETENTION_MS = 30 * 86_400_000;
+// One sweep call deletes at most SWEEP_ROUNDS * SWEEP_BATCH (20,000) expired rows. Each round is a two-statement batch
+// (fence insert, delete); with the rate-limit upsert that is at most 41 D1 statements, inside D1's
+// 50-queries-per-invocation Free limit. It stops at the first short round.
+const SWEEP_ROUNDS = 20;
+const SWEEP_BATCH = 1000;
 type Utterance = {
   id: string;
   text: string;
@@ -225,6 +236,12 @@ export class Relay {
     await this.store.revokeDevices(owner, deviceId);
     return { revoked: true };
   }
+  private cutoff() {
+    return new Date(this.now() - RETENTION_MS).toISOString();
+  }
+  private live(record: RecordValue | null) {
+    return !!record && (JSON.parse(record.value) as { createdAt: string }).createdAt > this.cutoff();
+  }
   private async limit(owner: string, scope: string, id: string, maximum: number) {
     if (!(await this.store.rateLimit(owner, scope, id, this.now(), maximum, 60_000)))
       throw new RelayError(429, "Rate limit reached; try again later");
@@ -238,11 +255,12 @@ export class Relay {
     return record && record.expires_at! > this.now() ? JSON.parse(record.value) : null;
   }
   async status(owner: string, sttConfigured = false) {
+    const cutoff = this.cutoff();
     const [deviceCount, pendingCount, subscription, utterances, devices] = await Promise.all([
       this.store.count(owner, "device"),
-      this.store.count(owner, "utterance"),
+      this.store.count(owner, "utterance", cutoff),
       this.subscription(owner),
-      this.store.list(owner, "utterance"),
+      this.store.list(owner, "utterance", undefined, cutoff),
       this.store.list(owner, "device"),
     ]);
     return {
@@ -354,9 +372,19 @@ export class Relay {
     };
     await this.limit(device.owner, "utterance-device", device.id, 30);
     await this.limit(device.owner, "utterance-owner", "owner", 60);
-    const inserted = await this.store.insert(this.record(device.owner, "utterance", value.id, value));
+    // Request-driven fallback for the scheduled retention sweep: one bounded round per submission. It is best-effort
+    // housekeeping; the read fences below stay closed without it, so its failure never blocks a fresh submission.
+    try {
+      await this.store.sweepExpired(this.cutoff(), 50, new Date(this.now()).toISOString());
+    } catch {
+      console.warn("retention_fallback_sweep_failed");
+    }
+    const inserted = await this.store.insertUnlessErased(this.record(device.owner, "utterance", value.id, value));
     const record = await this.store.get(device.owner, "utterance", value.id);
-    if (!record) throw new RelayError(503, "Utterance is temporarily unavailable");
+    // Absent only when the owner deleted this ID or a sweep purged it; while its row or fence exists, an expired retry
+    // is never revived or delivered.
+    if (!record) throw new RelayError(410, "Utterance was deleted");
+    if (!this.live(record)) throw new RelayError(410, "Utterance expired");
     const existing: Utterance = JSON.parse(record.value);
     if (!inserted && (existing.text !== value.text || existing.deviceId !== device.id))
       throw new RelayError(409, "Utterance ID already used");
@@ -387,6 +415,8 @@ export class Relay {
       const current = await this.store.get(owner, "utterance", value.id);
       return current ? (JSON.parse(current.value) as Utterance) : value;
     }
+    // The awaits above can cross the retention boundary; the claim still holds this exact record, so recheck the clock.
+    if (value.createdAt <= this.cutoff()) return claimed;
     let accepted = false;
     let category: DeliveryOutcome["category"];
     let httpStatus: number | null = null;
@@ -438,7 +468,7 @@ export class Relay {
     return current ? (JSON.parse(current.value) as Utterance) : settled;
   }
   async drain(device: Device) {
-    const candidate = await this.store.deliveryCandidate(device.owner, device.id, this.now());
+    const candidate = await this.store.deliveryCandidate(device.owner, device.id, this.now(), this.cutoff());
     if (candidate) await this.deliver(device.owner, candidate);
   }
   async pendingPage(owner: string, cursor?: string) {
@@ -451,7 +481,7 @@ export class Relay {
         throw new RelayError(400, "Invalid pending cursor");
       }
     }
-    const records = await this.store.pendingPage(owner, after);
+    const records = await this.store.pendingPage(owner, after, this.cutoff());
     const page = records.slice(0, 10).map((record) => JSON.parse(record.value) as Utterance);
     const last = page.at(-1);
     return {
@@ -472,7 +502,7 @@ export class Relay {
     };
   }
   async pending(owner: string) {
-    return (await this.store.list(owner, "utterance"))
+    return (await this.store.list(owner, "utterance", undefined, this.cutoff()))
       .map((r) => JSON.parse(r.value) as Utterance)
       .filter((r) => r.status !== "replied")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -480,7 +510,7 @@ export class Relay {
   async reply(owner: string, input: unknown) {
     const params = z.object({ utterance_id: z.string().uuid(), text }).strict().parse(input);
     const record = await this.store.get(owner, "utterance", params.utterance_id);
-    if (!record) throw new RelayError(404, "Unknown utterance");
+    if (!record || !this.live(record)) throw new RelayError(404, "Unknown utterance");
     const value: Utterance = JSON.parse(record.value);
     if (value.reply && value.reply !== params.text)
       throw new RelayError(409, "Utterance already has a different reply");
@@ -493,26 +523,66 @@ export class Relay {
       deviceId: value.deviceId,
       createdAt: new Date(this.now()).toISOString(),
     });
-    if (!(await this.store.writeReply(this.record(owner, "utterance", value.id, value), record.value, message)))
+    if (!(await this.store.writeReply(this.record(owner, "utterance", value.id, value), record.value, message))) {
+      // Deleted while this reply was in flight: report it as gone so the caller stops retrying.
+      if (!(await this.store.get(owner, "utterance", value.id))) throw new RelayError(404, "Unknown utterance");
       throw new RelayError(409, "Utterance changed; retry with the same reply");
+    }
     return { utterance_id: value.id, stored_for_g2: true, physical_display_confirmed: false };
   }
   async send(owner: string, input: unknown) {
     const params = z.object({ message_id: z.string().uuid(), text }).strict().parse(input);
     const value = { ...params, createdAt: new Date(this.now()).toISOString() };
-    if (!(await this.store.insert(this.record(owner, "message", params.message_id, value)))) {
-      const existing = JSON.parse((await this.store.get(owner, "message", params.message_id))!.value);
-      if (existing.text !== params.text) throw new RelayError(409, "Message ID already used");
+    if (!(await this.store.insertUnlessErased(this.record(owner, "message", params.message_id, value)))) {
+      const record = await this.store.get(owner, "message", params.message_id);
+      if (!record) throw new RelayError(410, "Message was deleted");
+      if (!this.live(record)) throw new RelayError(410, "Message expired");
+      if (JSON.parse(record.value).text !== params.text) throw new RelayError(409, "Message ID already used");
     }
     return { message_id: params.message_id, stored_for_g2: true, physical_display_confirmed: false };
   }
-  async messages(device: Device) {
+  async poll(device: Device) {
     // One leased event attempt per active device poll; no background execution is promised.
     await this.drain(device);
-    return (await this.store.list(device.owner, "message", device.id))
-      .map((r) => JSON.parse(r.value))
-      .filter((r) => !r.deviceId || r.deviceId === device.id)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .slice(-100);
+    const cutoff = this.cutoff();
+    const snapshot = await this.store.pollSnapshot(device.owner, device.id, cutoff);
+    return {
+      messages: snapshot.messages
+        .map((r) => JSON.parse(r.value))
+        .filter((r) => !r.deviceId || r.deviceId === device.id)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .slice(-100),
+      // Increases once per owner deletion; companions drop cached history when it rises.
+      conversation_revision: snapshot.revision,
+      // The fence this response was read with: a message whose createdAt is at or before it has expired.
+      retention_cutoff: cutoff,
+    };
+  }
+  async messages(device: Device) {
+    return (await this.poll(device)).messages;
+  }
+  async deleteConversations(owner: string) {
+    const erased = await this.store.eraseConversations(owner, new Date(this.now()).toISOString());
+    return {
+      deleted: true,
+      utterances: erased.utterances,
+      messages: erased.messages,
+      conversation_revision: erased.revision,
+    };
+  }
+  // Fixed policy, global and bounded: removes only rows already past retention and reports counts, never rows.
+  async sweepExpired() {
+    const cutoff = this.cutoff();
+    let deleted = 0;
+    for (let round = 0; round < SWEEP_ROUNDS; round++) {
+      const removed = await this.store.sweepExpired(cutoff, SWEEP_BATCH, new Date(this.now()).toISOString());
+      deleted += removed;
+      if (removed < SWEEP_BATCH) return { deleted, more: false, cutoff, retentionDays: RETENTION_MS / 86_400_000 };
+    }
+    return { deleted, more: true, cutoff, retentionDays: RETENTION_MS / 86_400_000 };
+  }
+  async enforceRetention(caller: string) {
+    await this.limit(caller, "retention", "caller", 6);
+    return this.sweepExpired();
   }
 }

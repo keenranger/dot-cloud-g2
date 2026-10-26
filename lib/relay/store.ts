@@ -1,5 +1,8 @@
 import type { RecordValue, Store } from "./core";
 
+// Must match relay_retention_idx's WHERE clause exactly so the sweep can use the partial index.
+const retained = "kind IN ('utterance','message','erased-utterance','erased-message')";
+
 export class D1Store implements Store {
   private db: D1Database;
   constructor(db: D1Database) {
@@ -11,23 +14,23 @@ export class D1Store implements Store {
       .bind(owner, kind, id)
       .first<RecordValue>();
   }
-  async list(owner: string, kind: string, deviceId?: string) {
-    if (kind === "message")
-      return (
-        await this.db
-          .prepare(
-            "SELECT * FROM relay_records WHERE owner = ? AND kind = 'message' AND (json_extract(value, '$.deviceId') IS NULL OR json_extract(value, '$.deviceId') = ?) ORDER BY json_extract(value, '$.createdAt') DESC LIMIT 100",
-          )
-          .bind(owner, deviceId ?? "")
-          .all<RecordValue>()
-      ).results;
+  // Conversation reads take a retention cutoff: rows created at or before it are never returned.
+  private messages(owner: string, deviceId: string | undefined, cutoff: string) {
+    return this.db
+      .prepare(
+        "SELECT * FROM relay_records WHERE owner = ? AND kind = 'message' AND (json_extract(value, '$.deviceId') IS NULL OR json_extract(value, '$.deviceId') = ?) AND json_extract(value, '$.createdAt') > ? ORDER BY json_extract(value, '$.createdAt') DESC LIMIT 100",
+      )
+      .bind(owner, deviceId ?? "", cutoff);
+  }
+  async list(owner: string, kind: string, deviceId?: string, cutoff = "") {
+    if (kind === "message") return (await this.messages(owner, deviceId, cutoff).all<RecordValue>()).results;
     if (kind === "utterance")
       return (
         await this.db
           .prepare(
-            "SELECT * FROM relay_records INDEXED BY relay_pending_idx WHERE owner = ? AND kind = 'utterance' AND json_extract(value, '$.status') != 'replied' ORDER BY json_extract(value, '$.createdAt') ASC LIMIT 100",
+            "SELECT * FROM relay_records INDEXED BY relay_pending_idx WHERE owner = ? AND kind = 'utterance' AND json_extract(value, '$.status') != 'replied' AND json_extract(value, '$.createdAt') > ? ORDER BY json_extract(value, '$.createdAt') ASC LIMIT 100",
           )
-          .bind(owner)
+          .bind(owner, cutoff)
           .all<RecordValue>()
       ).results;
     return (
@@ -37,17 +40,17 @@ export class D1Store implements Store {
         .all<RecordValue>()
     ).results;
   }
-  deliveryCandidate(owner: string, deviceId: string, now: number) {
+  deliveryCandidate(owner: string, deviceId: string, now: number, cutoff = "") {
     return this.db
       .prepare(
-        "SELECT * FROM relay_records INDEXED BY relay_pending_idx WHERE owner = ? AND kind = 'utterance' AND json_extract(value, '$.status') != 'replied' AND json_extract(value, '$.status') IN ('pending','failed') AND json_extract(value, '$.deviceId') = ? AND COALESCE(json_extract(value, '$.deliveryAttempts'),0) < 5 AND COALESCE(json_extract(value, '$.nextAttemptAt'),0) <= ? AND COALESCE(json_extract(value, '$.deliveryLeaseUntil'),0) <= ? ORDER BY json_extract(value, '$.createdAt') ASC, id ASC LIMIT 1",
+        "SELECT * FROM relay_records INDEXED BY relay_pending_idx WHERE owner = ? AND kind = 'utterance' AND json_extract(value, '$.status') != 'replied' AND json_extract(value, '$.status') IN ('pending','failed') AND json_extract(value, '$.deviceId') = ? AND COALESCE(json_extract(value, '$.deliveryAttempts'),0) < 5 AND COALESCE(json_extract(value, '$.nextAttemptAt'),0) <= ? AND COALESCE(json_extract(value, '$.deliveryLeaseUntil'),0) <= ? AND json_extract(value, '$.createdAt') > ? ORDER BY json_extract(value, '$.createdAt') ASC, id ASC LIMIT 1",
       )
-      .bind(owner, deviceId, now, now)
+      .bind(owner, deviceId, now, now, cutoff)
       .first<RecordValue>();
   }
-  async pendingPage(owner: string, after?: { createdAt: string; id: string }) {
+  async pendingPage(owner: string, after?: { createdAt: string; id: string }, cutoff = "") {
     const base =
-      "SELECT * FROM relay_records INDEXED BY relay_pending_idx WHERE owner = ? AND kind = 'utterance' AND json_extract(value, '$.status') != 'replied'";
+      "SELECT * FROM relay_records INDEXED BY relay_pending_idx WHERE owner = ? AND kind = 'utterance' AND json_extract(value, '$.status') != 'replied' AND json_extract(value, '$.createdAt') > ?";
     if (after)
       return (
         await this.db
@@ -55,24 +58,24 @@ export class D1Store implements Store {
             base +
               " AND (json_extract(value, '$.createdAt') > ? OR (json_extract(value, '$.createdAt') = ? AND id > ?)) ORDER BY json_extract(value, '$.createdAt') ASC, id ASC LIMIT 11",
           )
-          .bind(owner, after.createdAt, after.createdAt, after.id)
+          .bind(owner, cutoff, after.createdAt, after.createdAt, after.id)
           .all<RecordValue>()
       ).results;
     return (
       await this.db
         .prepare(base + " ORDER BY json_extract(value, '$.createdAt') ASC, id ASC LIMIT 11")
-        .bind(owner)
+        .bind(owner, cutoff)
         .all<RecordValue>()
     ).results;
   }
-  async count(owner: string, kind: string) {
+  async count(owner: string, kind: string, cutoff = "") {
     const record =
       kind === "utterance"
         ? await this.db
             .prepare(
-              "SELECT COUNT(*) AS count FROM relay_records INDEXED BY relay_pending_idx WHERE owner = ? AND kind = 'utterance' AND json_extract(value, '$.status') != 'replied'",
+              "SELECT COUNT(*) AS count FROM relay_records INDEXED BY relay_pending_idx WHERE owner = ? AND kind = 'utterance' AND json_extract(value, '$.status') != 'replied' AND json_extract(value, '$.createdAt') > ?",
             )
-            .bind(owner)
+            .bind(owner, cutoff)
             .first<{ count: number }>()
         : await this.db
             .prepare("SELECT COUNT(*) AS count FROM relay_records WHERE owner = ? AND kind = ?")
@@ -86,6 +89,19 @@ export class D1Store implements Store {
         await this.db
           .prepare("INSERT OR IGNORE INTO relay_records (owner,kind,id,value,expires_at) VALUES (?,?,?,?,?)")
           .bind(r.owner, r.kind, r.id, r.value, r.expires_at)
+          .run()
+      ).meta.changes === 1
+    );
+  }
+  // An ID erased by its owner stays erased: a late retry cannot store it again while the tombstone lives.
+  async insertUnlessErased(r: RecordValue) {
+    return (
+      (
+        await this.db
+          .prepare(
+            "INSERT OR IGNORE INTO relay_records (owner,kind,id,value,expires_at) SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM relay_records WHERE owner = ? AND kind = 'erased-' || ? AND id = ?)",
+          )
+          .bind(r.owner, r.kind, r.id, r.value, r.expires_at, r.owner, r.kind, r.id)
           .run()
       ).meta.changes === 1
     );
@@ -163,6 +179,65 @@ export class D1Store implements Store {
         .bind(owner, deviceId)
         .run();
     else await this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'device'").bind(owner).run();
+  }
+  async eraseConversations(owner: string, at: string) {
+    // One transaction: text-free tombstones, deletion, and the revision companions use to drop cached history.
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO relay_records (owner,kind,id,value,expires_at) SELECT owner, 'erased-' || kind, id, ?, NULL FROM relay_records WHERE owner = ? AND kind IN ('utterance','message')",
+        )
+        .bind(JSON.stringify({ createdAt: at }), owner),
+      this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'utterance'").bind(owner),
+      this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'message'").bind(owner),
+      this.db
+        .prepare(
+          "INSERT INTO relay_records (owner,kind,id,value,expires_at) VALUES (?,'conversation-epoch','g2','{\"revision\":1}',NULL) ON CONFLICT (owner,kind,id) DO UPDATE SET value = json_set(value, '$.revision', json_extract(value, '$.revision') + 1)",
+        )
+        .bind(owner),
+      // A SELECT in the same transaction reads the new revision; batch() documents SELECT rows, not RETURNING rows.
+      this.db
+        .prepare(
+          "SELECT json_extract(value, '$.revision') AS revision FROM relay_records WHERE owner = ? AND kind = 'conversation-epoch' AND id = 'g2'",
+        )
+        .bind(owner),
+    ]);
+    return {
+      utterances: results[1].meta.changes,
+      messages: results[2].meta.changes,
+      revision: (results[4].results as { revision: number }[])[0].revision,
+    };
+  }
+  async pollSnapshot(owner: string, deviceId: string, cutoff: string) {
+    // Batched reads share one snapshot, so a revision never pairs with messages from before a deletion it reports.
+    const [epoch, messages] = await this.db.batch([
+      this.db
+        .prepare(
+          "SELECT json_extract(value, '$.revision') AS revision FROM relay_records WHERE owner = ? AND kind = 'conversation-epoch' AND id = 'g2'",
+        )
+        .bind(owner),
+      this.messages(owner, deviceId, cutoff),
+    ]);
+    return {
+      revision: (epoch.results as { revision: number }[])[0]?.revision ?? 0,
+      messages: messages.results as RecordValue[],
+    };
+  }
+  async sweepExpired(cutoff: string, limit: number, at: string) {
+    // D1 does not guarantee DELETE ... LIMIT, so the bound is a rowid subquery over the retention index. Its total
+    // order picks the same rows for both statements; new fences are dated `at` (after the cutoff) and stay outside it.
+    const expired = `SELECT rowid FROM relay_records INDEXED BY relay_retention_idx WHERE ${retained} AND json_extract(value, '$.createdAt') <= ? ORDER BY json_extract(value, '$.createdAt'), rowid LIMIT ?`;
+    // One transaction: each purged conversation ID keeps a text-free fence for another 30 days, so a same-ID retry
+    // cannot be stored again as new. Fences are themselves swept at the end of that window without a new fence.
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO relay_records (owner,kind,id,value,expires_at) SELECT owner, 'erased-' || kind, id, ?, NULL FROM relay_records WHERE rowid IN (${expired}) AND kind IN ('utterance','message')`,
+        )
+        .bind(JSON.stringify({ createdAt: at }), cutoff, limit),
+      this.db.prepare(`DELETE FROM relay_records WHERE rowid IN (${expired})`).bind(cutoff, limit),
+    ]);
+    return results[1].meta.changes;
   }
   findToken(id: string) {
     return this.db

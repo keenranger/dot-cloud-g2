@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Operational guide for agents working in this repository. Product and security design live in `README.md` and `even-app/README.md`; this file covers release paths and their boundaries.
+Operational guide for agents working in this repository. Product and security design live in `README.md` and `even-app/README.md`; this file covers verification, release paths and their boundaries.
 
 ## Production targets
 
@@ -9,7 +9,7 @@ Operational guide for agents working in this repository. Product and security de
 | Source repository | `origin` = `https://github.com/keenranger/dot-cloud-g2.git` (public), branch `main` |
 | Sites project | `appgprj_6adb099c2f588191a35d9749cda26f1f` (recorded in `.openai/hosting.json`) |
 | Relay public URL | `https://hey-dots-g2.keenranger.chatgpt.site` (MCP endpoint: `/mcp`) |
-| Even Hub app | package ID `app.mark.evendotscloud`, portal display name `even_dots`, manifest name `Lens MCP for G2` (builds through 0.4.0: `Dot Cloud`) |
+| Even Hub app | package ID `app.mark.evendotscloud`, portal display name `Lens MCP for G2` (observed 2026-10-24), manifest name `Lens MCP for G2` (builds through 0.4.0: `Dot Cloud`) |
 | Even Hub portal | `https://hub.evenrealities.com/hub/app.mark.evendotscloud/store-listing` |
 
 ## Publishing authorization
@@ -49,7 +49,7 @@ If the CLI is not signed in, ask the user to run `evenhub login` interactively. 
 Build and package (scripts as defined in `even-app/package.json`):
 
 ```sh
-pnpm -C even-app install
+pnpm -C even-app install --frozen-lockfile
 pnpm -C even-app build
 pnpm -C even-app test
 pnpm -C even-app lint
@@ -93,8 +93,54 @@ This records the earlier 0.3.0 release only; it does not describe the current so
 
 Re-read the remote state before acting; these historical snapshots are not current-state verification.
 
+### Deployment snapshot (2026-10-24)
+
+- Signed source `7f48b9c4d217e4e111477c5aed261c08133ed841`; native Sites workflow saved version 6 and deployment `appgdep_6adca17de560819180424353d0c654a1` succeeded at 12:16:10.672605 UTC. Audience remained public.
+- Even Hub 0.5.0, build 120792: Private, no channels, 7,566,491 bytes; SHA-256 `daee63bd8776fbd7c958ae4a1a6759cdfa78abad322a526140cc15ee85dc52c4`. CLI upload/read-back confirmed; SDK 0.0.16, minimum Even app 2.2.10.
+- See `docs/release-0.5.0-deployment.md`. Daily cleanup is not active; hosted D1 semantics/quota and physical runtime proof remain open. Policy documents remain drafts. Re-read remote state before acting.
+
+## Verification without physical devices
+
+Maximize applicable verification before handing remaining work to physical-device QA. A missing phone or G2 blocks hardware-dependent gates, not local implementation, integration, simulator, accessibility or packaging checks.
+
+### Exercise the changed behavior
+
+- Run the relevant root and companion checks from their `package.json` files. For releases or interacting changes, validate the integrated source, not separate branches or an earlier candidate.
+- Use `tests/companion-runtime.test.mjs` to drive the actual companion entry point through fake SDK, DOM, network and timer boundaries. Reproduce ordering failures with controlled acknowledgements, requests and clocks. Helper-only tests do not establish integration behavior.
+- Cover affected combinations: partial/final transcription, auto-send ON/OFF, explicit navigation, deferred replies, cancellation, unknown submission outcomes, deletion/expiry, stale snapshots, visibility transitions and reconnects. Add failing regressions for observed defects rather than duplicating implementation logic.
+- Run production relay SQL and migrations against an isolated local database. Exercise owner isolation, transaction failure, expiry boundaries, retries and late callbacks. Local SQLite/D1 shims do not establish hosted D1 semantics or quotas.
+- Exercise the real packaged wake WASM/models offline when wake behavior changes. Silence proves initialization and negative detection only. Use synthetic or explicitly authorized, non-sensitive recorded audio for positive and negative phrase cases; record input format and corpus provenance. Do not infer acoustic accuracy from silence or fake detector events.
+
+### Use the official Even Hub simulator
+
+Local verification includes preparing and running the official simulator. If it is missing, use a versioned, task-local installation or cache through the native package manager; do not stop at a failed PATH lookup or scan unrelated home directories. Verify the official publisher, selected version and supported commands before use. Before package installation, create a standalone temporary package outside the repository/workspace; an empty outputs directory can make pnpm select the enclosing parent project. Do not change global settings, application dependencies or lifecycle-script policy merely to make verification pass.
+
+Run the exact candidate's built companion against an isolated local relay or controlled fixtures. Exercise startup, Korean and long text, running captions, reply navigation and supported gesture events. Test display rejection and delayed acknowledgements in the actual-entry-point harness when the simulator cannot inject them. Use only automation capabilities documented by the installed simulator; do not invent endpoints or treat unsupported scenarios as passed.
+
+Capture the original glasses framebuffer after the target state renders. Record source commit and dirty state, build identity, simulator version, scenario, logs, image path and hash. Preserve the original RGBA/alpha encoding. A phone WebView capture or older screenshot is not a candidate glasses capture; label derived viewing aids and keep them separate from the original. Route GUI work through the existing separate-executor rules.
+
+### Verify the local phone and dashboard experience
+
+Use the supported local preview and native local sign-in with disposable data. Check keyboard operation, focus after success/cancel/failure, accessible names, live feedback, Korean IME, responsive layout and overflow. Inspect the actual DOM/accessibility tree and use available assistive technology; source inspection alone does not prove announcements or focus behavior.
+
+A failure of one browser backend does not establish that all browser verification is unavailable. Inspect the supported browser/executor inventory and use an available alternative through its normal approval flow. Do not scrape sessions, bypass authentication or retry unavailable tools blindly. An HTTP 200 establishes server readiness, not a rendered or accessible interface.
+
+### Recover and preserve evidence
+
+Preserve the first failure and source identity before repair. Diagnose it, make a bounded routine local repair within the authorized scope, record what changed, and rerun the affected check. Do not repeat an unchanged failure, relax checks or silently download an alternative tool. Preparing the official simulator as described above is authorized local setup; missing local tooling is not a physical-device blocker. If a capability remains unavailable, mark only that gate blocked and continue independent checks.
+
+For release reproducibility, use clean source exports, frozen installs and isolated dependency stores rather than linking a shared `node_modules`. Compare all output paths and hashes when claiming reproducibility. Earlier-source results do not establish the final candidate; rerun affected validation after integration or fixes, including when separately passing branches introduce ordering interactions.
+
+Keep a concise evidence matrix: requirement, exact source/build, method, observed result, artifact/log and remaining boundary. Preserve reports and release artifacts outside a worktree before removing it; ignored files can contain the only copies.
+
+### Keep physical boundaries explicit
+
+Mocks and simulated visibility/events prove application behavior under those inputs, not iOS lock-time suspension, Even WebView lifetime, real G2 microphone routing, BLE timing, optical readability, battery use, real provider performance or Mac-off operation.
+
+Before reporting that progress requires hardware, complete the applicable checks above and name the exact remaining physical scenario and acceptance criterion. Do not require irrelevant checks or repeat unchanged successful suites without a new reason. Simulator setup and local validation do not authorize production data changes, account/permission changes, publishing or physical-device mutation.
+
 ## Security and evidence
 
 - Soniox: the phone connects directly to Soniox over WSS with the user's key. The key stays in session memory by default; device persistence is an opt-in SDK setting. The relay never receives the key or raw audio.
 - Do not touch account sessions, `.env*`, `.dev.vars*`, credentials, or other secrets.
-- Do not fabricate proof. Passing tests or builds is not evidence of real behavior in the Even Hub WebView, Soniox, the G2 glasses, or a Mac-off round trip. Report only what was observed on real devices and services, and name what remains unverified.
+- Do not fabricate proof. Label source review, automated tests, simulator/browser observations, hosted-service checks and physical-device observations separately. Report the exact evidence and its limits; no layer substitutes for another.

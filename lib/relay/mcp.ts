@@ -7,7 +7,7 @@ export const tools = [
   {
     name: "reply_to_g2",
     description:
-      "Reply to an owner's pending Even G2 utterance using utterance_id. Receipt confirms durable storage, not physical display.",
+      "Reply to an owner's pending Even G2 utterance using utterance_id. Receipt confirms durable storage, not physical display. Deleted or expired utterances are unknown.",
     inputSchema: {
       type: "object",
       properties: { utterance_id: uuid, text: textProperty },
@@ -18,7 +18,7 @@ export const tools = [
   {
     name: "send_message_to_g2",
     description:
-      "Send a proactive message to the owner's G2 devices. Generate a UUID message_id; retry with identical ID and text. Receipt confirms durable storage, not physical display.",
+      "Send a proactive message to the owner's G2 devices. Generate a UUID message_id; retry with identical ID and text. Receipt confirms durable storage, not physical display. An ID the owner deleted cannot be sent again.",
     inputSchema: {
       type: "object",
       properties: { message_id: uuid, text: textProperty },
@@ -40,6 +40,12 @@ export const tools = [
     name: "get_status",
     description:
       "Read owner connection status and event transport verification state, without conversation text. Speech is transcribed on the phone directly (transcriptionMode phone_direct_soniox); sttConfigured refers only to legacy server-side transcription, and phoneKeyConfigured is null because the relay cannot know whether the phone has a key. Do not infer phone speech readiness from either field.",
+    inputSchema: empty,
+  },
+  {
+    name: "enforce_conversation_retention",
+    description:
+      "Maintenance for the daily retention schedule: permanently removes relay conversation records that are 30 or more days old, for all owners, up to 20,000 per call. Returns counts only; more is true only when the bound was reached.",
     inputSchema: empty,
   },
 ];
@@ -108,6 +114,12 @@ export async function dispatch(
               .strict()
               .parse(input.arguments ?? {});
             result = await relay.status(owner, sttConfigured);
+            break;
+          case "enforce_conversation_retention":
+            z.object({})
+              .strict()
+              .parse(input.arguments ?? {});
+            result = await relay.enforceRetention(owner);
             break;
           default:
             throw new RelayError(400, "Unknown tool");

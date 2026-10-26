@@ -56,9 +56,14 @@ let replyNotice: string | undefined;
 let headerNote: { text: string; view: string } | undefined;
 // A notice that says a capture is in progress; a pause discards the capture, so the notice must not come back with the page.
 let captureNotice: string | undefined;
+// The reply the phone shows, which stays there while G2 shows a notice; undefined when the phone shows a notice.
+let phoneReply: string | undefined;
 // The voice whose running text the capture notice shows on G2. It holds the body only while that notice is still
 // selected; a reply arriving meanwhile waits, and the user moving to a message ends it.
 let caption: { voice: LiveVoice; heading: string; label: string; text: string } | undefined;
+// Counts polls that brought new replies. Unlike `history.revision`, an owner deletion or expiry leaves it alone, so
+// neither can stand in for a reply that a capture or submission notice should give way to.
+let replies = 0;
 const view = () => `${selection}#${part}@${history.revision}`;
 const g2 = new G2Text((containerID, containerName, content) =>
   bridge!.textContainerUpgrade(
@@ -108,8 +113,8 @@ interface LiveVoice {
   id: string;
   version: number;
   keyRevision: number;
-  // History revision when the capture began; a reply received after it is shown once the capture is submitted.
-  revision: number;
+  // `replies` when the capture began; a reply received after it is shown once the capture is submitted.
+  replies: number;
 }
 let manualVoice: LiveVoice | undefined;
 let wakeVoice: LiveVoice | undefined;
@@ -335,6 +340,11 @@ function syncWake(retry = false): void {
     }
   });
 }
+/** The relay refused an utterance ID it no longer holds: the owner deleted it, or it passed retention. */
+class UtteranceGone extends Error {}
+const ERASED =
+  "대화 기록이 삭제되어 이 기기에 보이던 답변을 모두 지웠습니다. 입력 중이던 내용은 그대로이며 새 질문을 보낼 수 있습니다.";
+const EXPIRED = "보관 기간이 지난 답변을 이 기기에서도 지웠습니다.";
 const report = (e: unknown) => status(e instanceof Error ? e.message : "작업을 완료하지 못했습니다.");
 const current = (version: number) => !exited && generation === version;
 function controls(): void {
@@ -409,6 +419,10 @@ async function request<T>(path: string, method = "GET", body?: BodyInit, type = 
     });
     if (!current(version)) throw new DOMException("Connection changed", "AbortError");
     if (response.status === 401) throw new Error("연결이 만료되었습니다. 연결 해제 후 새 코드로 연결하세요.");
+    if (response.status === 410)
+      throw new UtteranceGone(
+        "대화 기록 삭제 또는 보관 기간 만료로 서버가 이 질문을 받지 않았습니다. 자동으로 다시 보내지 않으며, 다시 전송하면 새 질문으로 보냅니다.",
+      );
     if (!response.ok) throw new Error(`서버 요청 실패 (${response.status})`);
     const result = (await response.json()) as T;
     if (!current(version)) throw new DOMException("Connection changed", "AbortError");
@@ -496,6 +510,7 @@ function showSelectedReply(): void {
   const reply = history.selected;
   if (!reply) return;
   el("reply").textContent = reply.text;
+  phoneReply = reply.message_id;
   parts = segments(reply.text);
   part = 0;
   selection = `reply:${reply.message_id}`;
@@ -543,9 +558,13 @@ function releaseCaption(voice: LiveVoice | undefined, notice = CAPTURE_STOPPED):
   caption = undefined;
   // A paused page keeps the capture notice selected, so resume brings the reader back.
   if (!held || !active) return false;
-  if (history.revision !== voice.revision && history.selected) restoreReader();
+  if (replyWaiting(voice.replies)) restoreReader();
   else displayText(notice);
   return true;
+}
+/** A reply arrived since `since` and is still kept: a deletion that took it leaves nothing to come back. */
+function replyWaiting(since: number): boolean {
+  return replies !== since && !!history.selected;
 }
 /** A reply arrived behind the reader while G2 waited for it: the message being read comes back in place of the notice. */
 function restoreReader(): void {
@@ -601,31 +620,86 @@ async function poll(): Promise<void> {
   const version = generation;
   pollRunning = true;
   try {
-    const result = await request<{ messages: Reply[] }>("/api/device/messages");
+    const result = await request<{ messages: Reply[]; conversation_revision?: unknown; retention_cutoff?: unknown }>(
+      "/api/device/messages",
+    );
     if (!current(version) || !active) return;
     const revision = history.revision;
+    // The revision is applied before the messages it was read with; an older snapshot is not shown at all.
+    const conversation = history.observe(result.conversation_revision);
+    if (conversation === "stale" || conversation === "invalid") {
+      status(
+        conversation === "stale"
+          ? "이미 반영한 대화 기록보다 오래된 서버 응답이라 표시하지 않았습니다."
+          : "서버 응답에 대화 기록 버전이 없어 삭제된 답변이 섞였을 수 있으므로 표시하지 않았습니다.",
+      );
+      return;
+    }
+    if (conversation === "erased") conversationErased();
+    const expired = history.expire(result.retention_cutoff);
+    // Expiry alone bumps the revision but brings no reply that a waiting notice could give way to.
+    const kept = history.revision;
     const changed = history.receive(result.messages);
+    if (history.revision !== kept) replies++;
     controls();
-    if (changed && captionHolds()) {
+    // The reply on screen passed retention and no newer reply replaces it: the reader moves to the oldest kept one.
+    if (
+      expired &&
+      !changed &&
+      selection.startsWith("reply:") &&
+      `reply:${history.selected?.message_id}` !== selection
+    ) {
+      status(EXPIRED);
+      if (history.selected) showSelectedReply();
+      else {
+        el("reply").textContent = EXPIRED;
+        phoneReply = undefined;
+        displayText(EXPIRED);
+      }
+    } else if (changed && captionHolds()) {
       // The phone shows the reply now; G2 keeps the running speech and shows the reply when the capture is submitted.
       el("reply").textContent = history.selected!.text;
-      status("Dot 답변 수신 · 음성 입력 중이라 G2에는 전송 후 표시합니다.");
+      phoneReply = history.selected!.message_id;
+      status(
+        conversation === "erased"
+          ? `${ERASED} 새 답변은 음성 입력을 전송한 뒤 G2에 표시합니다.`
+          : "Dot 답변 수신 · 음성 입력 중이라 G2에는 전송 후 표시합니다.",
+      );
     } else if (changed) {
-      status("Dot 답변 수신 · G2 표시를 요청합니다.");
+      status(conversation === "erased" ? `${ERASED} 새 답변을 표시합니다.` : "Dot 답변 수신 · G2 표시를 요청합니다.");
       showSelectedReply();
-    } else if (history.revision !== revision && selection === replyNotice) restoreReader();
+    } else if (history.revision !== kept && selection === replyNotice) restoreReader();
     // New replies behind the reader only change the header position; the body keeps its scroll.
     else if (
       history.revision !== revision ||
       (ready && (!g2.has(2, g2Header()) || !g2.has(1, segmentContent(parts, part), `${selection}#${part}`)))
     )
       renderDisplay();
+    // G2 keeps its notice, but the reply left on the phone behind it expired too: the phone moves to the oldest kept one.
+    // The status line still describes the capture or wait in progress; the live reply region announces the change.
+    if (expired && phoneReply && !history.messages.some((reply) => reply.message_id === phoneReply)) {
+      el("reply").textContent = history.selected?.text ?? EXPIRED;
+      phoneReply = history.selected?.message_id;
+    }
   } catch (e) {
     if (current(version) && active) report(e);
   } finally {
     pollRunning = false;
     if (!exited && active && credentials) pollTimer = setTimeout(() => void poll(), current(version) ? 2500 : 0);
   }
+}
+/**
+ * The owner deleted the conversation: the replies shown here are gone, on the phone and on G2. The text field, its
+ * draft, the key, pairing, preferences, the microphone and any capture in progress are left as they are.
+ */
+function conversationErased(): void {
+  replyNotice = undefined;
+  headerNote = undefined;
+  el("reply").textContent = ERASED;
+  phoneReply = undefined;
+  status(ERASED);
+  // A capture notice is current work, not old history, so it stays on G2 until the capture moves on.
+  if (selection !== captureNotice) displayText(ERASED);
 }
 function queueMic(action: () => Promise<void>): void {
   micQueue = micQueue.then(action).catch(report).finally(controls);
@@ -658,7 +732,7 @@ function openVoice(version: number, wake: boolean): LiveVoice | undefined {
     id: crypto.randomUUID(),
     version,
     keyRevision: sonioxKey.revision,
-    revision: history.revision,
+    replies,
     stream: openSonioxStream({
       credential: () => key,
       signal: entry.controller.signal,
@@ -713,14 +787,13 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
             : "전사 완료 · 입력 중이던 내용 뒤에 전사 결과를 붙였습니다. 확인한 뒤 전송하세요.",
         );
         // A reply received during the capture comes back in place of the notice; the phone keeps the review prompt.
-        if (caption?.voice === voice && captionHolds() && history.revision !== voice.revision && history.selected)
-          showSelectedReply();
+        if (caption?.voice === voice && captionHolds() && replyWaiting(voice.replies)) showSelectedReply();
         else displayText("전사 완료 · 휴대폰에서 확인한 뒤 전송하세요.");
         return next.draft;
       },
       send: (text) => {
         submitted = true;
-        return sendText(text, version, id, voice.revision);
+        return sendText(text, version, id, voice.replies);
       },
       // A failed automatic send leaves the transcript in the field as review mode would, on the same connection only.
       keep: (text) => {
@@ -734,6 +807,8 @@ async function finishVoice(voice: LiveVoice): Promise<void> {
       },
     });
   } catch (e) {
+    // keep() may have put the refused ID back with the transcript; a resend must use a new one.
+    if (e instanceof UtteranceGone && draft?.id === id) draft = undefined;
     if (submitted) notice = e instanceof Error ? e.message : "전송 결과를 확인하지 못했습니다.";
     if (kept)
       throw new Error(
@@ -885,18 +960,37 @@ el("wake-enabled").onchange = () => {
   syncWake(true);
 };
 el("auto-send").onchange = savePreferences;
-/** `replyRevision` is the history revision a reply must be newer than to replace the submission notice. */
-async function sendText(text: string, version: number, id: string, replyRevision = history.revision): Promise<void> {
+/** `since` is the `replies` count a reply must come after to replace the submission notice. */
+async function sendText(text: string, version: number, id: string, since = replies): Promise<void> {
   if (!current(version) || !active) return;
+  const erasures = history.erasures;
   status("서버로 전송 중 · 아직 저장 확인 전");
-  const result = await request<{ status: string }>("/api/device/utterances", "POST", utteranceBody(id, text));
+  let result: { status: string };
+  try {
+    result = await request<{ status: string }>("/api/device/utterances", "POST", utteranceBody(id, text));
+  } catch (e) {
+    // The relay will refuse this ID for good, so a deliberate resend of the same text gets a new one.
+    if (e instanceof UtteranceGone && draft?.id === id) draft = undefined;
+    throw e;
+  }
   if (!current(version) || !active) return;
   const message =
     result.status === "accepted"
       ? "서버 저장 및 Dot 콜백 수신 확인 · 답변을 기다립니다."
       : "서버에 저장됨 · Dot 수신과 답변은 아직 확인되지 않았습니다.";
-  // A reply can arrive while the submission HTTP response is still in flight.
-  if (history.canShowSubmission(replyRevision)) {
+  if (history.erasures !== erasures) {
+    // Accepted around a deletion: it may have been deleted with the conversation, so no waiting state is claimed.
+    const gone = "서버가 질문을 받았지만 그 사이 대화 기록이 삭제되어 이 질문도 지워졌을 수 있습니다.";
+    status(gone);
+    // Running text the deletion left on G2 gives way to a reply written after it, else to the same statement, never
+    // to "not sent". The phone keeps the statement either way.
+    if (captionHolds()) {
+      if (replyWaiting(since)) showSelectedReply();
+      else displayText(gone);
+    }
+  }
+  // A reply can arrive while the submission HTTP response is still in flight; a deletion or expiry is not one.
+  else if (!replyWaiting(since)) {
     status(result.status === "replied" ? "서버에 답변 있음 · 답변을 불러옵니다." : message);
     if (result.status !== "replied") displayText(message);
     else void poll();
@@ -1091,6 +1185,7 @@ el("disconnect").onclick = () => {
   busy = false;
   history.clear();
   el("reply").textContent = "연결을 해제했습니다.";
+  phoneReply = undefined;
   displayText("연결을 해제했습니다.");
   controls();
   void saveCredentials("")

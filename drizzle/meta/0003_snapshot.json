@@ -1,0 +1,129 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "60d0ca7f-7fba-414a-ab49-427544a86a66",
+  "prevId": "abd808a6-0487-44e4-a813-428ceb36420b",
+  "tables": {
+    "relay_records": {
+      "name": "relay_records",
+      "columns": {
+        "owner": {
+          "name": "owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value": {
+          "name": "value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "relay_lookup_idx": {
+          "name": "relay_lookup_idx",
+          "columns": [
+            "kind",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "relay_timeline_idx": {
+          "name": "relay_timeline_idx",
+          "columns": [
+            "owner",
+            "kind",
+            "json_extract(\"value\", '$.createdAt')"
+          ],
+          "isUnique": false
+        },
+        "relay_pending_idx": {
+          "name": "relay_pending_idx",
+          "columns": [
+            "owner",
+            "json_extract(\"value\", '$.createdAt')"
+          ],
+          "isUnique": false,
+          "where": "\"relay_records\".\"kind\" = 'utterance' AND json_extract(\"relay_records\".\"value\", '$.status') != 'replied'"
+        },
+        "relay_retention_idx": {
+          "name": "relay_retention_idx",
+          "columns": [
+            "json_extract(\"value\", '$.createdAt')"
+          ],
+          "isUnique": false,
+          "where": "\"relay_records\".\"kind\" IN ('utterance','message','erased-utterance','erased-message')"
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "relay_records_owner_kind_id_pk": {
+          "columns": [
+            "owner",
+            "kind",
+            "id"
+          ],
+          "name": "relay_records_owner_kind_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {
+      "relay_timeline_idx": {
+        "columns": {
+          "json_extract(\"value\", '$.createdAt')": {
+            "isExpression": true
+          }
+        }
+      },
+      "relay_pending_idx": {
+        "columns": {
+          "json_extract(\"value\", '$.createdAt')": {
+            "isExpression": true
+          }
+        }
+      },
+      "relay_retention_idx": {
+        "columns": {
+          "json_extract(\"value\", '$.createdAt')": {
+            "isExpression": true
+          }
+        }
+      }
+    }
+  }
+}

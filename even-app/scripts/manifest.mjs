@@ -16,7 +16,7 @@ writeFileSync(
       package_id: "app.mark.evendotscloud",
       edition: "202601",
       name: "Lens MCP for G2",
-      version: "0.4.2",
+      version: "0.5.0",
       min_sdk_version: "0.0.16",
       entrypoint: "index.html",
       permissions: [

@@ -64,6 +64,60 @@ class MemoryStore {
   async put(record) {
     this.rows.set(this.key(record.owner, record.kind, record.id), structuredClone(record));
   }
+  async insertUnlessErased(record) {
+    if (this.rows.has(this.key(record.owner, `erased-${record.kind}`, record.id))) return false;
+    return this.insert(record);
+  }
+  async eraseConversations(owner, at) {
+    const erased = { utterances: 0, messages: 0 };
+    // Map iteration tolerates deleting the current entry; added tombstones are skipped by the kind check.
+    for (const record of this.rows.values())
+      if (record.owner === owner && (record.kind === "utterance" || record.kind === "message")) {
+        await this.insert({
+          owner,
+          kind: `erased-${record.kind}`,
+          id: record.id,
+          value: JSON.stringify({ createdAt: at }),
+          expires_at: null,
+        });
+        await this.remove(owner, record.kind, record.id);
+        erased[`${record.kind}s`]++;
+      }
+    const epoch = await this.get(owner, "conversation-epoch", "g2");
+    const revision = (epoch ? JSON.parse(epoch.value).revision : 0) + 1;
+    await this.put({
+      owner,
+      kind: "conversation-epoch",
+      id: "g2",
+      value: JSON.stringify({ revision }),
+      expires_at: null,
+    });
+    return { ...erased, revision };
+  }
+  async pollSnapshot(owner, deviceId, cutoff) {
+    const epoch = await this.get(owner, "conversation-epoch", "g2");
+    return {
+      revision: epoch ? JSON.parse(epoch.value).revision : 0,
+      messages: (await this.list(owner, "message")).filter((r) => JSON.parse(r.value).createdAt > cutoff),
+    };
+  }
+  async sweepExpired(cutoff, limit, at) {
+    const expired = [...this.rows.values()]
+      .filter((r) => /^(erased-)?(utterance|message)$/.test(r.kind) && JSON.parse(r.value).createdAt <= cutoff)
+      .slice(0, limit);
+    for (const r of expired) {
+      if (!r.kind.startsWith("erased-"))
+        await this.insert({
+          owner: r.owner,
+          kind: `erased-${r.kind}`,
+          id: r.id,
+          value: JSON.stringify({ createdAt: at }),
+          expires_at: null,
+        });
+      await this.remove(r.owner, r.kind, r.id);
+    }
+    return expired.length;
+  }
   async compareAndSwap(record, previous) {
     const old = this.rows.get(this.key(record.owner, record.kind, record.id));
     if (old?.value !== previous) return false;

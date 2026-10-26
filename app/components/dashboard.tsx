@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type DeliveryCategory =
   | "accepted"
@@ -43,6 +43,14 @@ const dotPrompt = `G2 Bridge 플러그인의 "utterance.created" 이벤트를 se
 export default function Dashboard({ displayName }: { displayName: string }) {
   const [origin, setOrigin] = useState("");
   const [revoking, setRevoking] = useState(false);
+  // Deleting conversations takes two deliberate steps; the second names what cannot be erased here.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const deleteTrigger = useRef<HTMLButtonElement>(null);
+  const deletePrompt = useRef<HTMLParagraphElement>(null);
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  // Set when an erase settles so focus moves only once React has re-enabled or replaced the controls.
+  const focusAfterDelete = useRef<"success" | "failure" | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [busy, setBusy] = useState(false);
@@ -70,6 +78,16 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     // Hydrate the dashboard from the authenticated server after mounting.
     void refresh();
   }, [refresh]);
+  useEffect(() => {
+    if (deleting || !focusAfterDelete.current) return;
+    const outcome = focusAfterDelete.current;
+    focusAfterDelete.current = null;
+    // Disabling the pressed button drops focus to the body; keep any place the user moved to meanwhile.
+    if (document.activeElement && document.activeElement !== document.body) return;
+    // After a failure the warning stays open so retry and cancel are the next Tab stops.
+    // A failed refresh hides the deletion group, so fall back to the always-present refresh control.
+    ((outcome === "failure" ? deletePrompt.current : null) ?? deleteTrigger.current ?? refreshButton.current)?.focus();
+  }, [deleting]);
 
   async function createPairing() {
     setBusy(true);
@@ -111,6 +129,42 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     }
   }
 
+  function startDelete() {
+    setConfirmingDelete(true);
+    // Move focus to the warning so screen readers announce what deletion cannot undo.
+    requestAnimationFrame(() => deletePrompt.current?.focus());
+  }
+  function cancelDelete() {
+    setConfirmingDelete(false);
+    requestAnimationFrame(() => deleteTrigger.current?.focus());
+  }
+  async function deleteConversations() {
+    setDeleting(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/conversations/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true }),
+      });
+      if (response.status === 401) throw new Error("로그인 세션이 만료되었습니다. 다시 로그인해 주세요.");
+      if (!response.ok) throw new Error("대화 기록을 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      const result = (await response.json()) as { utterances: number; messages: number };
+      setMessage(
+        `서버의 대화 기록 ${result.utterances + result.messages}건을 삭제했습니다. 기기 연결과 Dot 구독은 그대로입니다.`,
+      );
+      setConfirmingDelete(false);
+      focusAfterDelete.current = "success";
+      await refresh();
+    } catch (cause) {
+      focusAfterDelete.current = "failure";
+      setError(cause instanceof Error ? cause.message : "대화 기록을 삭제하지 못했습니다.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function copy(value: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -131,6 +185,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
           <p className="account">{displayName}</p>
         </div>
         <button
+          ref={refreshButton}
           className="button secondary small"
           type="button"
           onClick={() => {
@@ -259,6 +314,41 @@ export default function Dashboard({ displayName }: { displayName: string }) {
           <button type="button" className="button secondary small" disabled={revoking} onClick={() => void revokeAll()}>
             {revoking ? "연결 해제 중…" : "내 모든 기기 연결 해제"}
           </button>
+        </div>
+      )}
+      {status && (
+        <div className="device-actions" role="group" aria-labelledby="delete-conversations-title">
+          <div>
+            <p id="delete-conversations-title">
+              이 계정의 대화 기록(음성 입력 텍스트, Dot 답변, 알림 메시지)을 서버에서 바로 삭제합니다. 기기 연결과 Dot
+              구독은 유지됩니다.
+            </p>
+            {confirmingDelete && (
+              <p ref={deletePrompt} tabIndex={-1}>
+                삭제하면 되돌릴 수 없습니다. 이미 ChatGPT(Dot)나 Soniox로 전달된 내용, 휴대폰에 이미 표시된 내용은 이
+                서버에서 지울 수 없습니다. 정말 삭제할까요?
+              </p>
+            )}
+          </div>
+          {confirmingDelete ? (
+            <div>
+              <button
+                type="button"
+                className="button secondary small"
+                disabled={deleting}
+                onClick={() => void deleteConversations()}
+              >
+                {deleting ? "삭제 중…" : "대화 기록 영구 삭제"}
+              </button>
+              <button type="button" className="button secondary small" disabled={deleting} onClick={cancelDelete}>
+                취소
+              </button>
+            </div>
+          ) : (
+            <button ref={deleteTrigger} type="button" className="button secondary small" onClick={startDelete}>
+              대화 기록 삭제
+            </button>
+          )}
         </div>
       )}
       <section className="last-step">

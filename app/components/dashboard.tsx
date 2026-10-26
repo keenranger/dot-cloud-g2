@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { type ActivePairing, type Pairing, clearPairing, restorePairing, savePairing } from "@/lib/pairing-session";
 
 type DeliveryCategory =
   | "accepted"
@@ -24,10 +25,6 @@ type Status = {
     last: { category: DeliveryCategory; httpStatus: number | null; at: string } | null;
   };
 };
-type Pairing = {
-  code: string;
-  expiresAt: string;
-};
 const deliveryLabels: Record<DeliveryCategory, string> = {
   accepted: "Dot 이벤트 주소가 수신함",
   http_4xx: "Dot 이벤트 주소가 거절함",
@@ -38,6 +35,14 @@ const deliveryLabels: Record<DeliveryCategory, string> = {
   invalid_response: "잘못된 응답",
 };
 const sonioxKeyGuide = "https://soniox.com/docs/guides/api-key-permissions";
+// Tab-scoped: survives a reload of this tab, not other tabs, browsers or devices.
+function tabStorage() {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 const dotPrompt = `G2 Bridge 플러그인의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 입력을 받으면 한국어로 답하고, reply_to_g2 도구에 받은 것과 동일한 utterance_id와 한국어 답변 text를 보내 줘. 이벤트 전달이 실제로 확인되기 전에는 연결되었다고 말하지 마.`;
 
 export default function Dashboard({ displayName }: { displayName: string }) {
@@ -49,6 +54,10 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   const deleteTrigger = useRef<HTMLButtonElement>(null);
   const deletePrompt = useRef<HTMLParagraphElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
+  const pairingButton = useRef<HTMLButtonElement>(null);
+  const pairingResult = useRef<HTMLDivElement>(null);
+  // Bumped by every create or revoke so a server check that started earlier cannot overwrite the newer state.
+  const pairingVersion = useRef(0);
   // Set when an erase settles so focus moves only once React has re-enabled or replaced the controls.
   const focusAfterDelete = useRef<"success" | "failure" | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
@@ -71,13 +80,42 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       setRefreshing(false);
     }
   }, []);
+  // Shows this tab's saved code only while the signed-in owner's server state names it; anything else erases it.
+  const syncPairing = useCallback(async () => {
+    const version = pairingVersion.current;
+    let active: ActivePairing = null;
+    try {
+      const response = await fetch("/api/pairing", { cache: "no-store" });
+      if (response.ok) active = ((await response.json()) as { active: ActivePairing }).active;
+    } catch {
+      active = null;
+    }
+    if (version !== pairingVersion.current) return;
+    const restored = await restorePairing(tabStorage(), active);
+    if (version === pairingVersion.current) setPairing(restored);
+  }, []);
   useEffect(() => {
     // Read the browser URL only after mounting to avoid an SSR mismatch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setOrigin(window.location.origin);
     // Hydrate the dashboard from the authenticated server after mounting.
     void refresh();
-  }, [refresh]);
+    void syncPairing();
+  }, [refresh, syncPairing]);
+  useEffect(() => {
+    if (!pairing) return;
+    const timer = window.setTimeout(
+      () => {
+        clearPairing(tabStorage());
+        // The code and its copy button disappear; keep keyboard users on the control that makes a new code.
+        if (pairingResult.current?.contains(document.activeElement)) pairingButton.current?.focus();
+        setPairing(null);
+        setMessage("연결 코드가 만료되었습니다. 기기를 연결하려면 새 코드를 만들어 주세요.");
+      },
+      Math.max(0, Date.parse(pairing.expiresAt) - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [pairing]);
   useEffect(() => {
     if (deleting || !focusAfterDelete.current) return;
     const outcome = focusAfterDelete.current;
@@ -94,6 +132,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     setError("");
     setMessage("");
     setPairing(null);
+    pairingVersion.current++;
     try {
       const response = await fetch("/api/pairing", {
         method: "POST",
@@ -101,10 +140,14 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         body: "{}",
       });
       if (!response.ok) throw new Error("연결 코드를 만들지 못했습니다. 잠시 후 다시 시도해 주세요.");
-      setPairing((await response.json()) as Pairing);
-      setMessage("새 연결 코드를 만들었습니다. Even Hub 앱에 입력해 주세요.");
+      const created = (await response.json()) as Pairing;
+      savePairing(tabStorage(), created);
+      setPairing(created);
+      setMessage("새 연결 코드를 만들었습니다. 이전 코드는 더 이상 쓸 수 없습니다. Even Hub 앱에 입력해 주세요.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "연결 코드를 만들지 못했습니다.");
+      // The server may or may not have replaced the code; show only what it still reports as active.
+      await syncPairing();
     } finally {
       setBusy(false);
     }
@@ -120,6 +163,8 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       });
       if (!response.ok) throw new Error("기기 연결을 해제하지 못했습니다.");
       setMessage("내 모든 기기 연결을 해제했습니다. 다시 사용하려면 새 코드로 페어링해 주세요.");
+      pairingVersion.current++;
+      clearPairing(tabStorage());
       setPairing(null);
       await refresh();
     } catch (cause) {
@@ -232,12 +277,22 @@ export default function Dashboard({ displayName }: { displayName: string }) {
             아래 서버 주소와 연결 코드를 입력하세요. 안경이 휴대폰에 연결되어 있어야 합니다.
           </p>
           <AddressField label="Even Hub 서버 주소" value={origin} onCopy={copy} />
-          <p className="helper">코드는 한 번만 사용할 수 있습니다. 연결할 때 생성하세요.</p>
-          <button type="button" className="button primary" disabled={busy} onClick={() => void createPairing()}>
+          <p className="helper">
+            코드는 만료 시각까지 여러 번 사용할 수 있고, 사용해도 만료 시각은 늘어나지 않습니다. 새 코드를 만들면 이전
+            코드는 바로 쓸 수 없게 되며, 이미 연결된 기기는 그대로 유지됩니다. 만든 코드는 이 브라우저 탭에서만 새로고침
+            후에도 다시 볼 수 있습니다.
+          </p>
+          <button
+            ref={pairingButton}
+            type="button"
+            className="button primary"
+            disabled={busy}
+            onClick={() => void createPairing()}
+          >
             {busy ? "코드 만드는 중…" : pairing ? "새 연결 코드 만들기" : "연결 코드 만들기"}
           </button>
           {pairing && (
-            <div className="pairing-result">
+            <div className="pairing-result" ref={pairingResult}>
               <label htmlFor="pairing-code">Even Hub 연결 코드</label>
               <div className="code-row">
                 <input id="pairing-code" readOnly value={pairing.code} autoComplete="off" spellCheck={false} />

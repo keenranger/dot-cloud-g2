@@ -1,6 +1,6 @@
 # Even Hub cloud companion
 
-This independent companion connects G2 directly to the hosted relay and to Soniox speech-to-text. It requires no Mac service and no customer-run server. The owner signs into the relay in ChatGPT, creates a one-time device code, then enters the relay HTTPS origin and code in this app. Only the returned device-scoped bearer token is saved through Even Hub native local storage; ChatGPT browser cookies and owner tokens are not copied to the glasses app.
+This independent companion connects G2 directly to the hosted relay and to Soniox speech-to-text. It requires no Mac service and no customer-run server. The owner signs into the relay in ChatGPT, creates a pairing code (reusable until its 10-minute expiry; a newer code replaces it), then enters the relay HTTPS origin and code in this app. Only the returned device-scoped bearer token is saved through Even Hub native local storage; ChatGPT browser cookies and owner tokens are not copied to the glasses app.
 
 ## Build
 

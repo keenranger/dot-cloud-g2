@@ -8,3 +8,11 @@ export async function POST(request: Request) {
     return failure(error);
   }
 }
+export async function GET(request: Request) {
+  try {
+    const owner = ownerIdentity(request);
+    return json({ active: await runtime().relay.activePairing(owner) });
+  } catch (error) {
+    return failure(error);
+  }
+}

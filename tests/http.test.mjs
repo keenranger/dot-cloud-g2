@@ -230,6 +230,35 @@ test("HTTP and actual D1 isolate two signed-in tenants, ignoring body and device
   assert.match((await speech.json()).error, /Per-user/);
 });
 
+test("pairing state is Sites-owner scoped, never returns the code, and reuse is bounded by the fixed expiry", async (t) => {
+  globalThis.__relayTestEnv.DB = database();
+  t.after(() => globalThis.__relayTestEnv.DB.sqlite.close());
+  assert.equal((await pairing.GET(new Request("https://relay.test/api/pairing"))).status, 401);
+  assert.deepEqual(await (await pairing.GET(ownerRequest("alice", "/api/pairing"))).json(), { active: null });
+  const issued = await (await pairing.POST(ownerRequest("alice", "/api/pairing", {}))).json();
+  const stateResponse = await pairing.GET(ownerRequest("alice", "/api/pairing", undefined, { "x-owner-id": "bob" }));
+  assert.equal(stateResponse.headers.get("Cache-Control"), "no-store");
+  const state = await stateResponse.json();
+  assert.equal(state.active.expiresAt, issued.expiresAt);
+  assert(!JSON.stringify(state).includes(issued.code));
+  assert.deepEqual(await (await pairing.GET(ownerRequest("bob", "/api/pairing"))).json(), { active: null });
+  const first = await (await pair.POST(deviceRequest("unused", "/api/device/pair", { code: issued.code }))).json();
+  const second = await (await pair.POST(deviceRequest("unused", "/api/device/pair", { code: issued.code }))).json();
+  assert.notEqual(first.token, second.token);
+  assert.equal(
+    (await (await pairing.GET(ownerRequest("alice", "/api/pairing"))).json()).active.expiresAt,
+    issued.expiresAt,
+  );
+  const replacement = await (await pairing.POST(ownerRequest("alice", "/api/pairing", {}))).json();
+  assert.equal((await pair.POST(deviceRequest("unused", "/api/device/pair", { code: issued.code }))).status, 400);
+  assert.notEqual(
+    (await (await pairing.GET(ownerRequest("alice", "/api/pairing"))).json()).active.fingerprint,
+    state.active.fingerprint,
+  );
+  assert.equal((await (await status.GET(ownerRequest("alice", "/api/status"))).json()).deviceCount, 2);
+  assert.equal((await pair.POST(deviceRequest("unused", "/api/device/pair", { code: replacement.code }))).status, 200);
+});
+
 test("MCP 2026-07-28 requests with per-request _meta subscribe, clamp TTL, and return complete results", async (t) => {
   const db = database();
   globalThis.__relayTestEnv.DB = db;

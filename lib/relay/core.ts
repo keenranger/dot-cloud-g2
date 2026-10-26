@@ -32,7 +32,10 @@ export interface Store {
   writeReply(record: RecordValue, previous: string, message: RecordValue): Promise<boolean>;
   remove(owner: string, kind: string, id: string): Promise<void>;
   compareAndDelete(owner: string, kind: string, id: string, previous: string): Promise<boolean>;
-  consumePairing(hash: string, now: number): Promise<RecordValue | null>;
+  replacePairing(record: RecordValue): Promise<void>;
+  activePairing(owner: string, now: number): Promise<RecordValue | null>;
+  findPairing(hash: string, now: number): Promise<RecordValue | null>;
+  redeemPairing(hash: string, device: { id: string; value: string }, now: number): Promise<string | null>;
   findToken(hash: string): Promise<RecordValue | null>;
   revokeDevices(owner: string, deviceId?: string): Promise<void>;
   rateLimit(owner: string, scope: string, id: string, now: number, limit: number, windowMs: number): Promise<boolean>;
@@ -205,25 +208,33 @@ export class Relay {
   ): RecordValue {
     return { owner, kind, id, value: JSON.stringify(value), expires_at };
   }
+  // One active code per owner: issuing replaces every earlier code, and the code is reusable until its fixed expiry.
   async pairing(owner: string) {
     await this.limit(owner, "pairing", "owner", 10);
     const code = randomSecret();
     const expiresAt = this.now() + 600_000;
-    await this.store.insert(this.record(owner, "pairing", await hash(code), {}, expiresAt));
+    await this.store.replacePairing(this.record(owner, "pairing", await hash(code), {}, expiresAt));
     return { code, expiresAt: new Date(expiresAt).toISOString() };
+  }
+  // The code itself is never returned; its hash lets the owner's browser confirm a code it already holds.
+  async activePairing(owner: string) {
+    const record = await this.store.activePairing(owner, this.now());
+    return record ? { fingerprint: record.id, expiresAt: new Date(record.expires_at!).toISOString() } : null;
   }
   async pair(code: string) {
     const token = randomSecret();
     const deviceId = crypto.randomUUID();
-    const pairing = await this.store.consumePairing(await hash(code), this.now());
+    const id = await hash(code);
+    const pairing = await this.store.findPairing(id, this.now());
     if (!pairing) throw new RelayError(400, "Pairing code is invalid or expired");
-    // Consumption is atomic: a failed device insert burns the code safely.
-    await this.store.insert(
-      this.record(pairing.owner, "device", await hash(token), {
-        id: deviceId,
-        createdAt: new Date(this.now()).toISOString(),
-      }),
+    await this.limit(pairing.owner, "pair", "owner", 10);
+    // The device insert rechecks the code, so one replaced, revoked or expired since the lookup mints nothing.
+    const owner = await this.store.redeemPairing(
+      id,
+      { id: await hash(token), value: JSON.stringify({ id: deviceId, createdAt: new Date(this.now()).toISOString() }) },
+      this.now(),
     );
+    if (!owner) throw new RelayError(400, "Pairing code is invalid or expired");
     return { token, deviceId };
   }
   async authenticate(token: string): Promise<Device> {

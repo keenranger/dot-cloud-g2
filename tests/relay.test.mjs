@@ -138,11 +138,21 @@ class MemoryStore {
   async remove(owner, kind, id) {
     this.rows.delete(this.key(owner, kind, id));
   }
-  async consumePairing(id, now) {
-    const record = [...this.rows.values()].find((r) => r.kind === "pairing" && r.id === id && r.expires_at > now);
-    if (!record) return null;
-    this.rows.delete(this.key(record.owner, record.kind, id));
-    return record;
+  async replacePairing(record) {
+    for (const r of await this.list(record.owner, "pairing")) await this.remove(r.owner, r.kind, r.id);
+    await this.insert(record);
+  }
+  async activePairing(owner, now) {
+    return (await this.list(owner, "pairing")).find((r) => r.expires_at > now) ?? null;
+  }
+  async findPairing(id, now) {
+    return [...this.rows.values()].find((r) => r.kind === "pairing" && r.id === id && r.expires_at > now) ?? null;
+  }
+  async redeemPairing(id, device, now) {
+    const pairing = await this.findPairing(id, now);
+    if (!pairing) return null;
+    await this.insert({ owner: pairing.owner, kind: "device", ...device, expires_at: null });
+    return pairing.owner;
   }
   async rateLimit(owner, scope, id, now, limit, windowMs) {
     const record = await this.get(owner, `rate-${scope}`, id);
@@ -159,6 +169,8 @@ class MemoryStore {
   async revokeDevices(owner, deviceId) {
     for (const record of await this.list(owner, "device"))
       if (!deviceId || JSON.parse(record.value).id === deviceId) await this.remove(owner, "device", record.id);
+    if (!deviceId)
+      for (const record of await this.list(owner, "pairing")) await this.remove(owner, "pairing", record.id);
   }
   async findToken(id) {
     return [...this.rows.values()].find((r) => r.kind === "device" && r.id === id) ?? null;
@@ -186,16 +198,32 @@ test("owner authentication rejects missing identity and scopes to stable ID", ()
   );
 });
 
-test("pairing codes expire, are hashed and atomically single-use; tokens revoke", async () => {
+test("pairing codes are hashed, reusable until a fixed expiry, and tokens revoke", async () => {
   let now = 1000;
   const store = new MemoryStore();
   const relay = new Relay(store, undefined, () => now);
   const pairing = await relay.pairing("alice");
+  assert.equal(pairing.expiresAt, new Date(1000 + 600_000).toISOString());
   assert.equal((await store.list("alice", "pairing"))[0].id, await hash(pairing.code));
   assert(!JSON.stringify([...store.rows.values()]).includes(pairing.code));
+  // A used code stays valid: each redemption is a separate device with its own token.
   const results = await Promise.allSettled([relay.pair(pairing.code), relay.pair(pairing.code)]);
-  assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
-  const paired = results.find((r) => r.status === "fulfilled").value;
+  assert.equal(results.filter((r) => r.status === "fulfilled").length, 2);
+  const [paired, again] = results.map((r) => r.value);
+  assert.notEqual(paired.token, again.token);
+  assert.notEqual(paired.deviceId, again.deviceId);
+  assert.equal((await store.list("alice", "device")).length, 2);
+  // Redemption never extends the expiry.
+  now = 1000 + 599_999;
+  await relay.pair(pairing.code);
+  assert.equal((await store.list("alice", "pairing"))[0].expires_at, 1000 + 600_000);
+  assert.deepEqual(await relay.activePairing("alice"), {
+    fingerprint: await hash(pairing.code),
+    expiresAt: pairing.expiresAt,
+  });
+  now = 1000 + 600_000;
+  await assert.rejects(relay.pair(pairing.code), /invalid or expired/);
+  assert.equal(await relay.activePairing("alice"), null);
   const authenticated = await relay.authenticate(paired.token);
   assert.equal(authenticated.owner, "alice");
   assert(!JSON.stringify([...store.rows.values()]).includes(paired.token));
@@ -203,9 +231,39 @@ test("pairing codes expire, are hashed and atomically single-use; tokens revoke"
   assert.equal((await relay.authenticate(paired.token)).owner, "alice");
   await relay.revoke("alice", paired.deviceId);
   await assert.rejects(relay.authenticate(paired.token), /Invalid device token/);
-  const expired = await relay.pairing("alice");
-  now += 600001;
-  await assert.rejects(relay.pair(expired.code), /invalid or expired/);
+  assert.equal((await relay.authenticate(again.token)).owner, "alice");
+});
+
+test("a new pairing code invalidates the owner's previous codes and keeps paired devices", async () => {
+  let now = 1000;
+  const store = new MemoryStore();
+  const relay = new Relay(store, undefined, () => now);
+  const first = await relay.pairing("alice");
+  const bobs = await relay.pairing("bob");
+  const paired = await relay.pair(first.code);
+  now += 1000;
+  const second = await relay.pairing("alice");
+  await assert.rejects(relay.pair(first.code), /invalid or expired/);
+  assert.equal((await store.list("alice", "pairing")).length, 1);
+  assert.equal((await relay.authenticate(paired.token)).owner, "alice");
+  assert.equal((await relay.authenticate((await relay.pair(second.code)).token)).owner, "alice");
+  // Another owner's code is untouched by Alice's new code.
+  assert.equal((await relay.authenticate((await relay.pair(bobs.code)).token)).owner, "bob");
+  assert.equal((await relay.activePairing("bob")).fingerprint, await hash(bobs.code));
+  assert.equal((await relay.activePairing("alice")).fingerprint, await hash(second.code));
+  // Disconnecting every device also withdraws the reusable code.
+  await relay.revoke("alice");
+  await assert.rejects(relay.pair(second.code), /invalid or expired/);
+  assert.equal(await relay.activePairing("alice"), null);
+  assert.equal((await relay.activePairing("bob")).fingerprint, await hash(bobs.code));
+});
+
+test("pairing redemptions are rate limited per owner", async () => {
+  const relay = new Relay(new MemoryStore(), undefined, () => 1000);
+  const { code } = await relay.pairing("alice");
+  for (let n = 0; n < 10; n++) await relay.pair(code);
+  await assert.rejects(relay.pair(code), /Rate limit/);
+  await relay.pair((await relay.pairing("bob")).code);
 });
 
 test("verified subscription signs Korean utterance and correlates isolated reply", async () => {

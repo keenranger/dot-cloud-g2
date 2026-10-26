@@ -42,10 +42,23 @@ assert.deepEqual(discovery.capabilities.events, {});
 
 const paired = await request("/api/pairing", {}, { ...owner, Origin: base.origin });
 assert.equal(paired.status, 200);
-const { code } = await paired.json();
+const { code, expiresAt } = await paired.json();
 const attempts = await Promise.all([request("/api/device/pair", { code }), request("/api/device/pair", { code })]);
-assert.equal(attempts.filter((result) => result.status === 200).length, 1);
-const { token, deviceId } = await attempts.find((result) => result.status === 200).json();
+// A used code stays valid until its fixed expiry; each redemption is its own device token.
+assert.deepEqual(
+  attempts.map((result) => result.status),
+  [200, 200],
+);
+const [{ token, deviceId }, reused] = await Promise.all(attempts.map((result) => result.json()));
+assert.notEqual(reused.token, token);
+const pairingState = await (await request("/api/pairing", undefined, owner)).json();
+assert.equal(pairingState.active.expiresAt, expiresAt);
+assert.match(pairingState.active.fingerprint, /^[a-f0-9]{64}$/);
+assert.equal((await (await request("/api/pairing", undefined, otherOwner)).json()).active, null);
+const replacement = await (await request("/api/pairing", {}, { ...owner, Origin: base.origin })).json();
+assert.equal((await request("/api/device/pair", { code })).status, 400);
+assert.equal((await request("/api/device/pair", { code: replacement.code })).status, 200);
+assert.equal((await request("/api/status", undefined, owner).then((r) => r.json())).deviceCount, 3);
 const device = { Authorization: `Bearer ${token}` };
 const otherCode = await (await request("/api/pairing", {}, { ...otherOwner, Origin: base.origin })).json();
 const otherPaired = await request("/api/device/pair", { code: otherCode.code });
@@ -92,7 +105,9 @@ assert.equal((await request("/api/device/messages", undefined, otherDevice)).sta
 assert.equal((await request("/api/device/messages", undefined, device)).status, 200);
 assert.equal((await request("/api/devices/revoke", { all: true }, { ...owner, Origin: base.origin })).status, 200);
 assert.equal((await request("/api/device/messages", undefined, device)).status, 401);
+assert.equal((await request("/api/device/pair", { code: replacement.code })).status, 400);
+assert.equal((await (await request("/api/pairing", undefined, owner)).json()).active, null);
 console.log(
-  "PASS local Worker HTTP: multiuser identity/CSRF gates, atomic pairing, tenant-isolated Korean utterance and MCP reply, token-scoped messages, device CORS, isolated revocation, shared STT disabled",
+  "PASS local Worker HTTP: multiuser identity/CSRF gates, reusable owner-scoped pairing, tenant-isolated Korean utterance and MCP reply, token-scoped messages, device CORS, isolated revocation, shared STT disabled",
 );
 console.log("Not verified: hosted identity, real Dot subscription/webhook, STT provider, physical G2");

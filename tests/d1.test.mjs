@@ -2,19 +2,26 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { database } from "./helpers/d1.mjs";
 import { D1Store } from "../lib/relay/store.ts";
-import { Relay } from "../lib/relay/core.ts";
+import { Relay, hash } from "../lib/relay/core.ts";
 
-test("D1 migration and atomic pairing consumption, owner isolation and CAS", async () => {
+test("D1 migration, reusable pairing until expiry, owner isolation and CAS", async () => {
   const db = database();
   try {
+    let now = 1000;
     const store = new D1Store(db);
-    const relay = new Relay(store);
+    const relay = new Relay(store, undefined, () => now);
     const code = (await relay.pairing("alice")).code;
     const results = await Promise.allSettled([relay.pair(code), relay.pair(code)]);
-    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-    const paired = results.find((result) => result.status === "fulfilled").value;
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 2);
+    const paired = results[0].value;
     assert.equal((await relay.authenticate(paired.token)).owner, "alice");
+    assert.equal((await relay.authenticate(results[1].value.token)).owner, "alice");
+    assert.equal((await store.list("alice", "device")).length, 2);
     assert.equal((await store.list("bob", "device")).length, 0);
+    assert.equal((await store.list("alice", "pairing"))[0].expires_at, 601_000);
+    now = 601_000;
+    await assert.rejects(relay.pair(code), /invalid or expired/);
+    assert.equal(await relay.activePairing("alice"), null);
     const record = { owner: "alice", kind: "test", id: "1", value: '"initial"', expires_at: null };
     await store.insert(record);
     assert.equal(await store.compareAndSwap({ ...record, value: '"new"' }, '"initial"'), true);
@@ -23,6 +30,54 @@ test("D1 migration and atomic pairing consumption, owner isolation and CAS", asy
     assert.equal(await store.get("bob", "test", "1"), null);
     await relay.revoke("alice");
     await assert.rejects(relay.authenticate(paired.token), /Invalid device token/);
+  } finally {
+    db.sqlite.close();
+  }
+});
+
+test("D1 new pairing code replaces the owner's codes atomically and a stale redemption creates no device", async () => {
+  const db = database();
+  try {
+    const store = new D1Store(db);
+    const relay = new Relay(store, undefined, () => 1000);
+    const bobs = await relay.pairing("bob");
+    const first = await relay.pairing("alice");
+    const kept = await relay.pair(first.code);
+    const issued = await Promise.all([relay.pairing("alice"), relay.pairing("alice")]);
+    // Concurrent issues serialize: exactly one code survives and it is the one reported as active.
+    assert.equal((await store.list("alice", "pairing")).length, 1);
+    const winners = [];
+    for (const p of issued)
+      winners.push(
+        await relay.pair(p.code).then(
+          () => p,
+          () => null,
+        ),
+      );
+    assert.equal(winners.filter(Boolean).length, 1);
+    assert.equal((await relay.activePairing("alice")).fingerprint, await hash(winners.find(Boolean).code));
+    await assert.rejects(relay.pair(first.code), /invalid or expired/);
+    assert.equal((await relay.authenticate(kept.token)).owner, "alice");
+    assert.equal((await relay.authenticate((await relay.pair(bobs.code)).token)).owner, "bob");
+    // A code replaced between lookup and insert must not mint a device.
+    const stale = await relay.pairing("alice");
+    const racing = new Relay(
+      Object.assign(Object.create(store), {
+        async findPairing(id, now) {
+          const found = await store.findPairing(id, now);
+          await relay.pairing("alice");
+          return found;
+        },
+      }),
+      undefined,
+      () => 1000,
+    );
+    const before = (await store.list("alice", "device")).length;
+    await assert.rejects(racing.pair(stale.code), /invalid or expired/);
+    assert.equal((await store.list("alice", "device")).length, before);
+    await relay.revoke("alice");
+    assert.equal((await store.list("alice", "pairing")).length, 0);
+    assert.equal((await store.list("bob", "pairing")).length, 1);
   } finally {
     db.sqlite.close();
   }

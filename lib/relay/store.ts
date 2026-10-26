@@ -175,15 +175,23 @@ export class D1Store implements Store {
         .bind(r.owner, r.kind, r.id, r.value, r.expires_at),
     ]);
   }
+  async withdrawPairing(owner: string) {
+    await this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'pairing'").bind(owner).run();
+  }
+  // Connection keys have no expiry (NULL); codes issued before them stay valid only until their original expiry.
   activePairing(owner: string, now: number) {
     return this.db
-      .prepare("SELECT * FROM relay_records WHERE owner = ? AND kind = 'pairing' AND expires_at > ? LIMIT 1")
+      .prepare(
+        "SELECT * FROM relay_records WHERE owner = ? AND kind = 'pairing' AND (expires_at IS NULL OR expires_at > ?) LIMIT 1",
+      )
       .bind(owner, now)
       .first<RecordValue>();
   }
   findPairing(id: string, now: number) {
     return this.db
-      .prepare("SELECT * FROM relay_records WHERE kind = 'pairing' AND id = ? AND expires_at > ?")
+      .prepare(
+        "SELECT * FROM relay_records WHERE kind = 'pairing' AND id = ? AND (expires_at IS NULL OR expires_at > ?)",
+      )
       .bind(id, now)
       .first<RecordValue>();
   }
@@ -191,7 +199,7 @@ export class D1Store implements Store {
     // One statement: the device row exists only if the code was still valid when it was written.
     const record = await this.db
       .prepare(
-        "INSERT OR IGNORE INTO relay_records (owner,kind,id,value,expires_at) SELECT owner,'device',?,?,NULL FROM relay_records WHERE kind = 'pairing' AND id = ? AND expires_at > ? LIMIT 1 RETURNING owner",
+        "INSERT OR IGNORE INTO relay_records (owner,kind,id,value,expires_at) SELECT owner,'device',?,?,NULL FROM relay_records WHERE kind = 'pairing' AND id = ? AND (expires_at IS NULL OR expires_at > ?) LIMIT 1 RETURNING owner",
       )
       .bind(device.id, device.value, id, now)
       .first<{ owner: string }>();
@@ -203,7 +211,7 @@ export class D1Store implements Store {
         .prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'device' AND json_extract(value, '$.id') = ?")
         .bind(owner, deviceId)
         .run();
-    // Disconnecting every device also withdraws the reusable code, in the same transaction.
+    // Disconnecting every device also withdraws the connection key, in the same transaction.
     else
       await this.db.batch([
         this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'device'").bind(owner),

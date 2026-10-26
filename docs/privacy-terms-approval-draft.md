@@ -10,7 +10,7 @@
 
 Operator public display name: **keenranger**. Support/privacy contact: **kghnkl0103@gmail.com**. Approved for public use on 2026-10-24; this does not identify a legal personal name or validate mailbox operation. Portal telephone and address: not to be filled until it is confirmed whether the portal shows them publicly.
 
-Lens MCP for G2 is an independent companion connecting the user's ChatGPT Dot through MCP to G2 glasses. It is not an official Even Realities product and is not a general-purpose MCP client. The phone hosts the companion. Setup uses a one-time relay pairing code; voice transcription additionally uses the user's Soniox account/key.
+Lens MCP for G2 is an independent companion connecting the user's ChatGPT Dot through MCP to G2 glasses. It is not an official Even Realities product and is not a general-purpose MCP client. The phone hosts the companion. Setup uses a reusable relay connection key; voice transcription additionally uses the user's Soniox account/key.
 
 ### Information processed and why
 
@@ -43,7 +43,7 @@ Provider locations, infrastructure/access logs, backups and provider-side retent
 
 **Both versions:** returning only the latest 100 replies is a query/UI limit, not a deletion policy. Revoking a paired device deletes its authentication record and prevents subsequent token use; it is not conversation deletion, and that device's past utterances and messages remain stored under the owner until erased or past the cutoff (0.5.0 candidate). Disconnecting the companion clears the locally stored device connection, not the relay's stored conversations.
 
-Pairing codes are usable for 10 minutes from creation and may be redeemed repeatedly within that time; use does not extend it. Each owner has at most one active code: creating a new code or disconnecting all devices invalidates it. The dashboard keeps the plaintext code only in that browser tab's session storage. Subscriptions have a validity TTL (default one hour, bounded between one minute and one day) and can be explicitly unsubscribed, which deletes the subscription record. Expiration makes records unusable for that operation; no scheduled job purges expired pairing, subscription or rate-limit rows. Rate limits use one-minute validity windows, which likewise do not establish a database deletion schedule.
+Connection keys have no expiry and may be redeemed repeatedly. Each owner has at most one key: creating a new key, withdrawing it or disconnecting all devices invalidates it. The relay stores the key's hash and the key encrypted under a server secret so that the signed-in owner can reveal it again; the dashboard keeps the plaintext only in page memory while it is shown. A key remains stored until replaced or withdrawn. Subscriptions have a validity TTL (default one hour, bounded between one minute and one day) and can be explicitly unsubscribed, which deletes the subscription record. Expiration makes records unusable for that operation; no scheduled job purges expired pairing, subscription or rate-limit rows. Rate limits use one-minute validity windows, which likewise do not establish a database deletion schedule.
 
 The approved privacy contact is kghnkl0103@gmail.com; its operation must still be verified before this notice is published; no response deadline is promised by this draft.
 

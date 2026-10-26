@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, randomUUID } from "node:crypto";
-import { Relay, callbackUrl, hash, ownerIdentity, signedHeaders } from "../lib/relay/core.ts";
+import { callbackUrl, hash, importPairingSecret, ownerIdentity, signedHeaders } from "../lib/relay/core.ts";
+import { TestRelay } from "./helpers/relay.mjs";
 
 class MemoryStore {
   rows = new Map();
@@ -142,11 +143,18 @@ class MemoryStore {
     for (const r of await this.list(record.owner, "pairing")) await this.remove(r.owner, r.kind, r.id);
     await this.insert(record);
   }
+  async withdrawPairing(owner) {
+    for (const r of await this.list(owner, "pairing")) await this.remove(r.owner, r.kind, r.id);
+  }
   async activePairing(owner, now) {
-    return (await this.list(owner, "pairing")).find((r) => r.expires_at > now) ?? null;
+    return (await this.list(owner, "pairing")).find((r) => r.expires_at === null || r.expires_at > now) ?? null;
   }
   async findPairing(id, now) {
-    return [...this.rows.values()].find((r) => r.kind === "pairing" && r.id === id && r.expires_at > now) ?? null;
+    return (
+      [...this.rows.values()].find(
+        (r) => r.kind === "pairing" && r.id === id && (r.expires_at === null || r.expires_at > now),
+      ) ?? null
+    );
   }
   async redeemPairing(id, device, now) {
     const pairing = await this.findPairing(id, now);
@@ -198,32 +206,38 @@ test("owner authentication rejects missing identity and scopes to stable ID", ()
   );
 });
 
-test("pairing codes are hashed, reusable until a fixed expiry, and tokens revoke", async () => {
+test("connection keys are hashed and sealed, never expire, stay reusable, and reveal only to their owner", async () => {
   let now = 1000;
   const store = new MemoryStore();
-  const relay = new Relay(store, undefined, () => now);
+  const relay = new TestRelay(store, undefined, () => now);
   const pairing = await relay.pairing("alice");
-  assert.equal(pairing.expiresAt, new Date(1000 + 600_000).toISOString());
-  assert.equal((await store.list("alice", "pairing"))[0].id, await hash(pairing.code));
+  assert.deepEqual(pairing, { code: pairing.code, createdAt: new Date(1000).toISOString() });
+  const [row] = await store.list("alice", "pairing");
+  assert.equal(row.id, await hash(pairing.code));
+  assert.equal(row.expires_at, null);
+  assert.deepEqual(Object.keys(JSON.parse(row.value)).sort(), ["createdAt", "ct", "iv", "v"]);
   assert(!JSON.stringify([...store.rows.values()]).includes(pairing.code));
-  // A used code stays valid: each redemption is a separate device with its own token.
+  // A used key stays valid: each redemption is a separate device with its own token.
   const results = await Promise.allSettled([relay.pair(pairing.code), relay.pair(pairing.code)]);
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 2);
   const [paired, again] = results.map((r) => r.value);
   assert.notEqual(paired.token, again.token);
   assert.notEqual(paired.deviceId, again.deviceId);
   assert.equal((await store.list("alice", "device")).length, 2);
-  // Redemption never extends the expiry.
-  now = 1000 + 599_999;
-  await relay.pair(pairing.code);
-  assert.equal((await store.list("alice", "pairing"))[0].expires_at, 1000 + 600_000);
-  assert.deepEqual(await relay.activePairing("alice"), {
-    fingerprint: await hash(pairing.code),
-    expiresAt: pairing.expiresAt,
-  });
-  now = 1000 + 600_000;
-  await assert.rejects(relay.pair(pairing.code), /invalid or expired/);
-  assert.equal(await relay.activePairing("alice"), null);
+  // Well past the former 10-minute window, and a year later, the same key still pairs and reveals.
+  for (now of [1000 + 600_000, 1000 + 365 * 86_400_000]) {
+    await relay.pair(pairing.code);
+    assert.deepEqual(await relay.activePairing("alice"), {
+      fingerprint: await hash(pairing.code),
+      createdAt: pairing.createdAt,
+      revealable: true,
+      expiresAt: null,
+    });
+    assert.deepEqual(await relay.revealPairing("alice"), { code: pairing.code, fingerprint: await hash(pairing.code) });
+  }
+  assert.equal((await store.list("alice", "pairing"))[0].value, row.value);
+  await assert.rejects(relay.revealPairing("bob"), (e) => e.status === 404);
+  assert.equal(await relay.activePairing("bob"), null);
   const authenticated = await relay.authenticate(paired.token);
   assert.equal(authenticated.owner, "alice");
   assert(!JSON.stringify([...store.rows.values()]).includes(paired.token));
@@ -232,12 +246,128 @@ test("pairing codes are hashed, reusable until a fixed expiry, and tokens revoke
   await relay.revoke("alice", paired.deviceId);
   await assert.rejects(relay.authenticate(paired.token), /Invalid device token/);
   assert.equal((await relay.authenticate(again.token)).owner, "alice");
+  // Revoking one device keeps the key.
+  assert.equal((await relay.revealPairing("alice")).code, pairing.code);
+});
+
+test("without a valid secret issuing and revealing fail closed and the stored key keeps pairing", async () => {
+  const store = new MemoryStore();
+  const relay = new TestRelay(store, undefined, () => 1000);
+  const { code } = await relay.pairing("alice");
+  const stored = structuredClone(await store.list("alice", "pairing"));
+  for (const secret of [
+    null,
+    importPairingSecret(undefined),
+    importPairingSecret(""),
+    importPairingSecret("c2hvcnQ="),
+    importPairingSecret(Buffer.alloc(31).toString("base64")),
+    importPairingSecret(`${Buffer.alloc(32).toString("base64url")}`),
+  ]) {
+    const unconfigured = new TestRelay(store, undefined, () => 1000, secret);
+    await assert.rejects(unconfigured.pairing("alice"), (e) => e.status === 503);
+    await assert.rejects(unconfigured.revealPairing("alice"), (e) => e.status === 503);
+    assert.deepEqual(await store.list("alice", "pairing"), stored);
+    assert.equal((await unconfigured.activePairing("alice")).fingerprint, await hash(code));
+    assert.equal((await unconfigured.authenticate((await unconfigured.pair(code)).token)).owner, "alice");
+  }
+  // A different secret cannot open the key; the failure is reported, the row is not repaired or removed.
+  const other = new TestRelay(
+    store,
+    undefined,
+    () => 1000,
+    importPairingSecret(Buffer.alloc(32, 1).toString("base64")),
+  );
+  await assert.rejects(other.revealPairing("alice"), (e) => e.status === 409 && /cannot be recovered/.test(e.message));
+  assert.deepEqual(await store.list("alice", "pairing"), stored);
+  await other.pair(code);
+  assert.equal((await relay.revealPairing("alice")).code, code);
+});
+
+test("a sealed key opens only for its own owner and row and detects tampering", async () => {
+  const store = new MemoryStore();
+  const relay = new TestRelay(store, undefined, () => 1000);
+  const { code } = await relay.pairing("alice");
+  const [row] = await store.list("alice", "pairing");
+  const sealed = JSON.parse(row.value);
+  // Alice's sealed value copied to Bob, or to another row ID of Alice's, fails the additional-data check.
+  await store.insert({ ...row, owner: "bob" });
+  await assert.rejects(relay.revealPairing("bob"), (e) => e.status === 409);
+  const tampered = (value) => ({ ...row, value: JSON.stringify({ ...sealed, ...value }) });
+  const flip = (b64) => {
+    const bytes = Buffer.from(b64, "base64");
+    bytes[0] ^= 1;
+    return bytes.toString("base64");
+  };
+  for (const variant of [
+    { ...row, id: "f".repeat(64) },
+    tampered({ ct: flip(sealed.ct) }),
+    tampered({ iv: flip(sealed.iv) }),
+    tampered({ v: 2 }),
+    { ...row, value: "not json" },
+  ]) {
+    await store.withdrawPairing("alice");
+    await store.insert(variant);
+    await assert.rejects(relay.revealPairing("alice"), (e) => e.status === 409);
+    assert.equal((await relay.activePairing("alice")).fingerprint, variant.id);
+  }
+  // Each issue uses a fresh IV.
+  await relay.pairing("alice");
+  const next = JSON.parse((await store.list("alice", "pairing"))[0].value);
+  assert.notEqual(next.iv, sealed.iv);
+  assert.notEqual((await relay.revealPairing("alice")).code, code);
+});
+
+test("withdrawing or rotating stops the old key and keeps devices; earlier 10-minute codes are never promoted", async () => {
+  let now = 1000;
+  const store = new MemoryStore();
+  const relay = new TestRelay(store, undefined, () => now);
+  const first = await relay.pairing("alice");
+  const kept = await relay.pair(first.code);
+  assert.deepEqual(await relay.withdrawPairing("alice"), { withdrawn: true });
+  await assert.rejects(relay.pair(first.code), /invalid or expired/);
+  await assert.rejects(relay.revealPairing("alice"), (e) => e.status === 404);
+  assert.equal(await relay.activePairing("alice"), null);
+  assert.equal((await relay.authenticate(kept.token)).owner, "alice");
+  // A code from the earlier implementation: hash only, fixed expiry, nothing to reveal.
+  const legacy = "d".repeat(64);
+  await store.insert({
+    owner: "alice",
+    kind: "pairing",
+    id: await hash(legacy),
+    value: "{}",
+    expires_at: 1000 + 600_000,
+  });
+  assert.deepEqual(await relay.activePairing("alice"), {
+    fingerprint: await hash(legacy),
+    createdAt: null,
+    revealable: false,
+    expiresAt: new Date(1000 + 600_000).toISOString(),
+  });
+  await assert.rejects(relay.revealPairing("alice"), (e) => e.status === 409 && /earlier code/.test(e.message));
+  await relay.pair(legacy);
+  now = 1000 + 600_000;
+  await assert.rejects(relay.pair(legacy), /invalid or expired/);
+  assert.equal(await relay.activePairing("alice"), null);
+  assert.equal((await store.list("alice", "pairing"))[0].expires_at, 1000 + 600_000);
+  // One new key replaces it.
+  const fresh = await relay.pairing("alice");
+  assert.equal((await relay.revealPairing("alice")).code, fresh.code);
+  assert.equal((await store.list("alice", "pairing")).length, 1);
+});
+
+test("connection key reveals are rate limited per owner", async () => {
+  const relay = new TestRelay(new MemoryStore(), undefined, () => 1000);
+  await relay.pairing("alice");
+  await relay.pairing("bob");
+  for (let n = 0; n < 30; n++) await relay.revealPairing("alice");
+  await assert.rejects(relay.revealPairing("alice"), /Rate limit/);
+  await relay.revealPairing("bob");
 });
 
 test("a new pairing code invalidates the owner's previous codes and keeps paired devices", async () => {
   let now = 1000;
   const store = new MemoryStore();
-  const relay = new Relay(store, undefined, () => now);
+  const relay = new TestRelay(store, undefined, () => now);
   const first = await relay.pairing("alice");
   const bobs = await relay.pairing("bob");
   const paired = await relay.pair(first.code);
@@ -251,7 +381,7 @@ test("a new pairing code invalidates the owner's previous codes and keeps paired
   assert.equal((await relay.authenticate((await relay.pair(bobs.code)).token)).owner, "bob");
   assert.equal((await relay.activePairing("bob")).fingerprint, await hash(bobs.code));
   assert.equal((await relay.activePairing("alice")).fingerprint, await hash(second.code));
-  // Disconnecting every device also withdraws the reusable code.
+  // Disconnecting every device also withdraws the connection key.
   await relay.revoke("alice");
   await assert.rejects(relay.pair(second.code), /invalid or expired/);
   assert.equal(await relay.activePairing("alice"), null);
@@ -259,7 +389,7 @@ test("a new pairing code invalidates the owner's previous codes and keeps paired
 });
 
 test("pairing redemptions are rate limited per owner", async () => {
-  const relay = new Relay(new MemoryStore(), undefined, () => 1000);
+  const relay = new TestRelay(new MemoryStore(), undefined, () => 1000);
   const { code } = await relay.pairing("alice");
   for (let n = 0; n < 10; n++) await relay.pair(code);
   await assert.rejects(relay.pair(code), /Rate limit/);
@@ -269,7 +399,7 @@ test("pairing redemptions are rate limited per owner", async () => {
 test("verified subscription signs Korean utterance and correlates isolated reply", async () => {
   const captured = [];
   const store = new MemoryStore();
-  const relay = new Relay(store, async (destination, id, payload) => {
+  const relay = new TestRelay(store, async (destination, id, payload) => {
     const body = JSON.stringify(payload);
     const headers = await signedHeaders(destination.secret, id, body, 123456);
     const expected = createHmac("sha256", Buffer.alloc(32, 7)).update(`${id}.123456.${body}`).digest("base64");
@@ -304,7 +434,7 @@ test("verified subscription signs Korean utterance and correlates isolated reply
 test("no subscription and webhook failures retain durable unanswered utterances", async () => {
   const store = new MemoryStore();
   let fail = false;
-  const relay = new Relay(store, async (_destination, _id, payload) => {
+  const relay = new TestRelay(store, async (_destination, _id, payload) => {
     if (fail) throw new Error("network");
     return { status: 200, body: JSON.stringify({ challenge: payload.challenge }) };
   });
@@ -313,11 +443,11 @@ test("no subscription and webhook failures retain durable unanswered utterances"
   await relay.subscribe("alice", params);
   fail = true;
   assert.equal((await relay.submit(paired, { id: randomUUID(), text: "전송 실패해도 남겨줘" })).status, "failed");
-  assert.equal((await new Relay(store).pending("alice")).length, 2);
+  assert.equal((await new TestRelay(store).pending("alice")).length, 2);
 });
 
 test("rejected challenge never persists subscription; callback allowlist is exact", async () => {
-  const relay = new Relay(new MemoryStore(), async () => ({ status: 200, body: '{"challenge":"wrong"}' }));
+  const relay = new TestRelay(new MemoryStore(), async () => ({ status: 200, body: '{"challenge":"wrong"}' }));
   await assert.rejects(relay.subscribe("alice", params), /verification failed/);
   assert.equal((await relay.status("alice")).subscribed, false);
   for (const url of [
@@ -332,7 +462,7 @@ test("rejected challenge never persists subscription; callback allowlist is exac
 });
 
 test("proactive messages are idempotent, owner isolated and do not overwrite replies", async () => {
-  const relay = new Relay(new MemoryStore());
+  const relay = new TestRelay(new MemoryStore());
   const alice = await device(relay);
   const bob = await device(relay, "bob");
   const message_id = randomUUID();
@@ -345,7 +475,7 @@ test("proactive messages are idempotent, owner isolated and do not overwrite rep
 
 test("STT admission bounds each device and the owner's combined use", async () => {
   let now = 1000;
-  const relay = new Relay(new MemoryStore(), undefined, () => now);
+  const relay = new TestRelay(new MemoryStore(), undefined, () => now);
   const alice = await device(relay);
   const second = await device(relay);
   const third = await device(relay);
@@ -358,7 +488,7 @@ test("STT admission bounds each device and the owner's combined use", async () =
 });
 
 test("utterance UUIDs are scoped to owner and reject conflicting same-owner device writes", async () => {
-  const relay = new Relay(new MemoryStore());
+  const relay = new TestRelay(new MemoryStore());
   const alice = await device(relay);
   const aliceOther = await device(relay);
   const bob = await device(relay, "bob");
@@ -376,7 +506,7 @@ test("utterance UUIDs are scoped to owner and reject conflicting same-owner devi
 test("webhook reply settled during submit is preserved", async () => {
   const store = new MemoryStore();
   let relay;
-  relay = new Relay(store, async (_destination, _id, payload) => {
+  relay = new TestRelay(store, async (_destination, _id, payload) => {
     if (payload.name === "utterance.created")
       await relay.reply("alice", { utterance_id: payload.data.utterance_id, text: "즉시 응답" });
     return { status: 200, body: JSON.stringify({ challenge: payload.challenge }) };
@@ -402,7 +532,7 @@ test("CAS blocks a reply settled after submit's final read from being overwritte
     }
   }
   const store = new RacingStore();
-  const relay = new Relay(store, async (_destination, _id, payload) => ({
+  const relay = new TestRelay(store, async (_destination, _id, payload) => ({
     status: 200,
     body: JSON.stringify({ challenge: payload.challenge }),
   }));
@@ -428,7 +558,7 @@ test("verified callback replacement wins over a stale verification and rejects f
   const store = new MemoryStore();
   const a = deferred();
   const entered = deferred();
-  const relay = new Relay(store, async (destination, _id, payload) => {
+  const relay = new TestRelay(store, async (destination, _id, payload) => {
     if (destination.url.endsWith("slow")) {
       entered.resolve();
       await a.promise;
@@ -468,14 +598,14 @@ test("offline queued utterance drains on poll after subscribe with durable bound
     events.push(id);
     return { status: 503, body: "" };
   };
-  const relay = new Relay(store, transport, () => now);
+  const relay = new TestRelay(store, transport, () => now);
   const paired = await device(relay);
   const id = randomUUID();
   await relay.submit(paired, { id, text: "연결되면 전송해줘" });
   assert.equal(JSON.parse((await store.get("alice", "utterance", id)).value).deliveryAttempts, undefined);
   await relay.subscribe("alice", params);
   for (let attempt = 1; attempt <= 5; attempt++) {
-    const restarted = new Relay(store, transport, () => now);
+    const restarted = new TestRelay(store, transport, () => now);
     await restarted.messages(paired);
     const record = JSON.parse((await store.get("alice", "utterance", id)).value);
     assert.equal(record.deliveryAttempts, attempt);
@@ -503,14 +633,17 @@ test("concurrent polls and explicit resends acquire only one durable event lease
     await finish.promise;
     return { status: 200, body: "" };
   };
-  const relay = new Relay(store, transport);
+  const relay = new TestRelay(store, transport);
   const paired = await device(relay);
   const id = randomUUID();
   await relay.submit(paired, { id, text: "한 번만 전송" });
   await relay.subscribe("alice", params);
   const poll = relay.messages(paired);
   await entered.promise;
-  await Promise.all([new Relay(store, transport).messages(paired), relay.submit(paired, { id, text: "한 번만 전송" })]);
+  await Promise.all([
+    new TestRelay(store, transport).messages(paired),
+    relay.submit(paired, { id, text: "한 번만 전송" }),
+  ]);
   assert.equal(sends, 1);
   await relay.reply("alice", { utterance_id: id, text: "먼저 답장" });
   finish.resolve();
@@ -536,7 +669,7 @@ test("expired lease recovery cannot be overwritten by a late earlier callback", 
     }
     return { status: 200, body: "" };
   };
-  const relay = new Relay(store, transport, () => now);
+  const relay = new TestRelay(store, transport, () => now);
   const paired = await device(relay);
   const id = randomUUID();
   await relay.submit(paired, { id, text: "복구" });
@@ -544,7 +677,7 @@ test("expired lease recovery cannot be overwritten by a late earlier callback", 
   const first = relay.messages(paired);
   await entered.promise;
   now += 20001;
-  await new Relay(store, transport, () => now).messages(paired);
+  await new TestRelay(store, transport, () => now).messages(paired);
   old.resolve();
   await first;
   const value = JSON.parse((await store.get("alice", "utterance", id)).value);
@@ -555,7 +688,7 @@ test("expired lease recovery cannot be overwritten by a late earlier callback", 
 
 test("pending cursors traverse beyond old unanswered records with identical timestamps", async () => {
   const store = new MemoryStore();
-  const relay = new Relay(store, undefined, () => 1000);
+  const relay = new TestRelay(store, undefined, () => 1000);
   const paired = await device(relay);
   for (let n = 0; n < 25; n++) await relay.submit(paired, { id: randomUUID(), text: `요청 ${n}` });
   const first = await relay.pendingPage("alice");
@@ -586,7 +719,7 @@ test("unsubscribe cannot delete a verified replacement installed after its read"
     }
   }
   const store = new RacingStore();
-  const relay = new Relay(store, async (_destination, _id, payload) => ({
+  const relay = new TestRelay(store, async (_destination, _id, payload) => ({
     status: 200,
     body: JSON.stringify({ challenge: payload.challenge }),
   }));
@@ -614,7 +747,7 @@ test("status distinguishes never attempted, backoff, exhausted and unpaired-devi
     if (payload.type === "verification") return { status: 200, body: JSON.stringify({ challenge: payload.challenge }) };
     return { status: 503, body: "private callback detail" };
   };
-  const relay = new Relay(store, transport, () => now);
+  const relay = new TestRelay(store, transport, () => now);
   const paired = await device(relay);
   const id = randomUUID();
   await relay.submit(paired, { id, text: "비밀 발화" });
@@ -658,7 +791,7 @@ test("410 and 413 callback responses are not retried; thrown transport errors ar
     let now = 1000;
     let events = 0;
     const store = new MemoryStore();
-    const relay = new Relay(
+    const relay = new TestRelay(
       store,
       async (_destination, _id, payload) => {
         if (payload.type === "verification")
@@ -683,7 +816,7 @@ test("410 and 413 callback responses are not retried; thrown transport errors ar
 });
 
 test("status reports phone-direct transcription without claiming phone key readiness", async () => {
-  const relay = new Relay(new MemoryStore());
+  const relay = new TestRelay(new MemoryStore());
   for (const legacy of [false, true]) {
     const value = await relay.status("alice", legacy);
     assert.equal(value.sttConfigured, legacy);

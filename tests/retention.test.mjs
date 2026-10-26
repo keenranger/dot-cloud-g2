@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { database } from "./helpers/d1.mjs";
 import { D1Store } from "../lib/relay/store.ts";
-import { Relay } from "../lib/relay/core.ts";
+import { TestRelay } from "./helpers/relay.mjs";
 
 const DAY = 86_400_000;
 const T0 = Date.parse("2026-11-01T00:00:00.000Z");
@@ -20,7 +20,7 @@ function harness() {
     await onTransport(payload);
     return { status: 202, body: "" };
   };
-  const relay = new Relay(store, transport, () => clock.now);
+  const relay = new TestRelay(store, transport, () => clock.now);
   const raw = (owner, kind) =>
     db.sqlite.prepare("SELECT * FROM relay_records WHERE owner = ? AND kind = ?").all(owner, kind);
   return {

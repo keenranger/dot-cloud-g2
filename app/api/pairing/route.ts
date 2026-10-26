@@ -16,3 +16,13 @@ export async function GET(request: Request) {
     return failure(error);
   }
 }
+// Withdraws the connection key only; devices already paired stay connected.
+export async function DELETE(request: Request) {
+  try {
+    requireSameOrigin(request);
+    const owner = ownerIdentity(request);
+    return json(await runtime().relay.withdrawPairing(owner));
+  } catch (error) {
+    return failure(error);
+  }
+}

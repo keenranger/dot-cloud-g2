@@ -1,13 +1,18 @@
 import { env } from "cloudflare:workers";
 import { z } from "zod";
-import { Relay, RelayError, ownerIdentity as sitesIdentity } from "./core";
+import { Relay, RelayError, importPairingSecret, ownerIdentity as sitesIdentity } from "./core";
 import { D1Store } from "./store";
 
 export function runtime() {
-  const bindings = env as unknown as { DB?: D1Database };
+  const bindings = env as unknown as { DB?: D1Database; PAIRING_KEY_ENCRYPTION_KEY?: string };
   if (!bindings.DB) throw new RelayError(503, "Database is not configured");
   return {
-    relay: new Relay(new D1Store(bindings.DB)),
+    relay: new Relay(
+      new D1Store(bindings.DB),
+      undefined,
+      undefined,
+      importPairingSecret(bindings.PAIRING_KEY_ENCRYPTION_KEY),
+    ),
     // Shared server credentials must never authorize transcription for arbitrary tenants.
     // A per-user credential resolver can replace this fail-closed value after billing is chosen.
     apiKey: undefined as string | undefined,

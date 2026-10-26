@@ -1,82 +1,78 @@
-// Keeps the dashboard's pairing code across reloads of the same browser tab. The server stores only the code's hash,
-// so a stored code is shown again only while the signed-in owner's server state names it as the active, unexpired code.
-export type Pairing = { code: string; expiresAt: string };
-export type ActivePairing = { fingerprint: string; expiresAt: string } | null;
-type PairingStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+// The dashboard keeps the connection key's plaintext only in memory while the owner has it shown. The server is the
+// source of truth: metadata (the key's hash) says which key the signed-in owner has, and an explicit reveal returns it.
+export type ActivePairing = {
+  fingerprint: string;
+  createdAt: string | null;
+  // False for a code issued before connection keys were sealed: it keeps its fixed expiry and cannot be shown again.
+  revealable: boolean;
+  expiresAt: string | null;
+} | null;
+export type RevealedPairing = { code: string; fingerprint: string };
+type PairingStorage = Pick<Storage, "removeItem">;
 
-const key = "even-hub-pairing";
+// The tab cache used by the earlier reusable-code dashboard. Only this entry is removed.
+const legacyKey = "even-hub-pairing";
 
-async function sha256(value: string) {
+export async function fingerprint(value: string) {
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))), (b) =>
     b.toString(16).padStart(2, "0"),
   ).join("");
 }
-export function savePairing(storage: PairingStorage | null, pairing: Pairing) {
+export function forgetLegacyPairing(storage: PairingStorage | null) {
   try {
-    storage?.setItem(key, JSON.stringify({ code: pairing.code, expiresAt: pairing.expiresAt }));
-  } catch {
-    // Without storage the code is only lost on reload; the page still works.
-  }
-}
-export function clearPairing(storage: PairingStorage | null) {
-  try {
-    storage?.removeItem(key);
-  } catch {
-    // Nothing was readable either, so nothing can be restored.
-  }
-}
-// Any mismatch, expiry or unreadable entry erases the stored code instead of showing it.
-export async function restorePairing(storage: PairingStorage | null, active: ActivePairing, now = Date.now()) {
-  let stored: Pairing | null = null;
-  let raw: string | null = null;
-  try {
-    raw = storage?.getItem(key) ?? null;
-    const value: unknown = JSON.parse(raw ?? "null");
-    if (
-      value &&
-      typeof value === "object" &&
-      "code" in value &&
-      "expiresAt" in value &&
-      typeof value.code === "string" &&
-      typeof value.expiresAt === "string" &&
-      /^[a-f0-9]{64}$/.test(value.code)
-    )
-      stored = { code: value.code, expiresAt: value.expiresAt };
-  } catch {
-    stored = null;
-  }
-  if (
-    stored &&
-    active &&
-    active.expiresAt === stored.expiresAt &&
-    Date.parse(stored.expiresAt) > now &&
-    active.fingerprint === (await sha256(stored.code))
-  )
-    return stored;
-  // A code saved while this check ran is newer than what was checked, so it is left for its own check.
-  try {
-    if (storage?.getItem(key) === raw) clearPairing(storage);
+    storage?.removeItem(legacyKey);
   } catch {
     // Unreadable storage holds nothing that could be shown.
   }
-  return null;
 }
-// Each pairing operation takes a number from `latest` when it starts. A check changes the stored code only while no
-// operation started after it, so the latest-started check decides; `undefined` means a newer operation took over.
+// Each pairing operation that changes what the key is (create, withdraw, revoke, refresh, a session failure) takes a
+// number from `latest` when it starts. A result is used only while no such operation started after it; `undefined`
+// means a newer one took over. A failed check cannot vouch for any key, so it reports "unavailable", never "none".
 export async function checkPairing(
-  storage: PairingStorage | null,
   latest: { current: number },
   getActive: () => Promise<ActivePairing>,
   version = ++latest.current,
-) {
+): Promise<ActivePairing | "unavailable" | undefined> {
   if (version !== latest.current) return undefined;
-  let active: ActivePairing = null;
+  let active: ActivePairing | "unavailable";
   try {
     active = await getActive();
   } catch {
-    active = null;
+    active = "unavailable";
   }
+  return version === latest.current ? active : undefined;
+}
+// The created key is discarded; the owner signed in now confirms it by hash, so a response for an account that is no
+// longer signed in is never reported as this account's new key.
+export async function confirmCreated(
+  latest: { current: number },
+  created: { code: string },
+  getActive: () => Promise<ActivePairing>,
+) {
+  // The check's place in the order is taken when the response arrives, before hashing yields.
+  const version = ++latest.current;
+  const expected = await fingerprint(created.code);
+  const active = await checkPairing(latest, getActive, version);
+  if (active === undefined) return undefined;
+  return { active, confirmed: !!active && active !== "unavailable" && active.fingerprint === expected };
+}
+// A reveal does not start a new operation; any operation that starts while it runs discards its result. The key is
+// shown only if it is the key this page currently names for the owner, so a rotation elsewhere or an account change
+// returns null instead of a key the page does not describe.
+export async function revealPairing(
+  latest: { current: number },
+  shown: ActivePairing | "unavailable",
+  getReveal: () => Promise<RevealedPairing>,
+) {
+  const version = latest.current;
+  const revealed = await getReveal();
   if (version !== latest.current) return undefined;
-  const restored = await restorePairing(storage, active);
-  return version === latest.current ? restored : undefined;
+  if (
+    !shown ||
+    shown === "unavailable" ||
+    revealed.fingerprint !== shown.fingerprint ||
+    (await fingerprint(revealed.code)) !== shown.fingerprint
+  )
+    return null;
+  return version === latest.current ? revealed : undefined;
 }

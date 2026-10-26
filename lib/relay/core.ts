@@ -33,6 +33,7 @@ export interface Store {
   remove(owner: string, kind: string, id: string): Promise<void>;
   compareAndDelete(owner: string, kind: string, id: string, previous: string): Promise<boolean>;
   replacePairing(record: RecordValue): Promise<void>;
+  withdrawPairing(owner: string): Promise<void>;
   activePairing(owner: string, now: number): Promise<RecordValue | null>;
   findPairing(hash: string, now: number): Promise<RecordValue | null>;
   redeemPairing(hash: string, device: { id: string; value: string }, now: number): Promise<string | null>;
@@ -102,6 +103,68 @@ export async function hash(value: string) {
 }
 export function randomSecret() {
   return Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+// The owner's connection key is stored recoverably: AES-256-GCM under a Sites runtime secret, with a fresh IV per issue
+// and the owner and lookup hash bound as additional data, so a sealed key moved to another owner or row fails to open.
+// Redemption never needs this secret; it looks the key up by its SHA-256 hash.
+export type SealedPairingKey = { v: 1; iv: string; ct: string; createdAt: string };
+
+const imported = new Map<string, Promise<CryptoKey | null>>();
+
+function bytes(value: string) {
+  return Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+}
+function base64(value: Uint8Array) {
+  return btoa(String.fromCharCode(...value));
+}
+// Standard base64 of exactly 32 random bytes. Anything else leaves issuing and revealing disabled.
+export function importPairingSecret(raw: string | undefined): Promise<CryptoKey | null> {
+  if (!raw) return Promise.resolve(null);
+  let key = imported.get(raw);
+  if (!key) {
+    key = (async () => {
+      try {
+        if (!/^[A-Za-z0-9+/]{43}=$/.test(raw)) return null;
+        const material = bytes(raw);
+        if (material.length !== 32) return null;
+        return await crypto.subtle.importKey("raw", material, "AES-GCM", false, ["encrypt", "decrypt"]);
+      } catch {
+        return null;
+      }
+    })();
+    imported.set(raw, key);
+  }
+  return key;
+}
+function additionalData(owner: string, id: string) {
+  return new TextEncoder().encode(`lens-pairing-key:v1\n${owner}\n${id}`);
+}
+export async function sealPairingKey(key: CryptoKey, owner: string, id: string, code: string, createdAt: string) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: additionalData(owner, id) },
+      key,
+      new TextEncoder().encode(code),
+    ),
+  );
+  return { v: 1, iv: base64(iv), ct: base64(ct), createdAt } satisfies SealedPairingKey;
+}
+// Returns null for anything that does not open under this secret, owner and row.
+export async function openPairingKey(key: CryptoKey, owner: string, id: string, sealed: unknown) {
+  if (!sealed || typeof sealed !== "object") return null;
+  const { v, iv, ct } = sealed as Partial<SealedPairingKey>;
+  if (v !== 1 || typeof iv !== "string" || typeof ct !== "string") return null;
+  try {
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: bytes(iv), additionalData: additionalData(owner, id) },
+      key,
+      bytes(ct),
+    );
+    return new TextDecoder().decode(plain);
+  } catch {
+    return null;
+  }
 }
 export function ownerIdentity(request: Request): string {
   const owner = request.headers.get("oai-authenticated-user-id");
@@ -194,10 +257,17 @@ export class Relay {
   private store: Store;
   private transport: Transport;
   private now: () => number;
-  constructor(store: Store, transport: Transport = webhookTransport, now: () => number = Date.now) {
+  private pairingSecret: CryptoKey | null | Promise<CryptoKey | null>;
+  constructor(
+    store: Store,
+    transport: Transport = webhookTransport,
+    now: () => number = Date.now,
+    pairingSecret: CryptoKey | null | Promise<CryptoKey | null> = null,
+  ) {
     this.store = store;
     this.transport = transport;
     this.now = now;
+    this.pairingSecret = pairingSecret;
   }
   private record(
     owner: string,
@@ -208,18 +278,71 @@ export class Relay {
   ): RecordValue {
     return { owner, kind, id, value: JSON.stringify(value), expires_at };
   }
-  // One active code per owner: issuing replaces every earlier code, and the code is reusable until its fixed expiry.
+  // Without the secret nothing is issued or revealed, and the stored key is left untouched.
+  private async sealingKey() {
+    const key = await this.pairingSecret;
+    if (!key) throw new RelayError(503, "Connection key encryption is not configured");
+    return key;
+  }
+  // One connection key per owner, with no expiry: issuing replaces the earlier key, which stops working at once.
+  // The row keeps the key's hash for redemption and the key itself sealed for the owner to reveal again.
   async pairing(owner: string) {
+    const key = await this.sealingKey();
     await this.limit(owner, "pairing", "owner", 10);
     const code = randomSecret();
-    const expiresAt = this.now() + 600_000;
-    await this.store.replacePairing(this.record(owner, "pairing", await hash(code), {}, expiresAt));
-    return { code, expiresAt: new Date(expiresAt).toISOString() };
+    const id = await hash(code);
+    const createdAt = new Date(this.now()).toISOString();
+    const sealed = await sealPairingKey(key, owner, id, code, createdAt);
+    await this.store.replacePairing(this.record(owner, "pairing", id, sealed));
+    return { code, createdAt };
   }
-  // The code itself is never returned; its hash lets the owner's browser confirm a code it already holds.
+  // Metadata only: the hash lets the owner's browser confirm a key it was just given. Codes issued before connection
+  // keys were sealed keep their fixed expiry and can never be revealed.
   async activePairing(owner: string) {
     const record = await this.store.activePairing(owner, this.now());
-    return record ? { fingerprint: record.id, expiresAt: new Date(record.expires_at!).toISOString() } : null;
+    if (!record) return null;
+    if (record.expires_at !== null)
+      return {
+        fingerprint: record.id,
+        createdAt: null,
+        revealable: false,
+        expiresAt: new Date(record.expires_at).toISOString(),
+      };
+    let createdAt: unknown = null;
+    try {
+      createdAt = (JSON.parse(record.value) as { createdAt?: unknown }).createdAt;
+    } catch {
+      // An unreadable row still names the key by hash; revealing it reports it as unrecoverable.
+    }
+    return {
+      fingerprint: record.id,
+      createdAt: typeof createdAt === "string" ? createdAt : null,
+      revealable: true,
+      expiresAt: null,
+    };
+  }
+  // A failure to open is reported, never repaired: the stored key keeps working for redemption.
+  async revealPairing(owner: string) {
+    const key = await this.sealingKey();
+    await this.limit(owner, "pairing-reveal", "owner", 30);
+    const record = await this.store.activePairing(owner, this.now());
+    if (!record) throw new RelayError(404, "No connection key");
+    if (record.expires_at !== null) throw new RelayError(409, "This earlier code cannot be shown again");
+    let sealed: unknown = null;
+    try {
+      sealed = JSON.parse(record.value);
+    } catch {
+      sealed = null;
+    }
+    const code = await openPairingKey(key, owner, record.id, sealed);
+    if (!code || !/^[a-f0-9]{64}$/.test(code) || (await hash(code)) !== record.id)
+      throw new RelayError(409, "Connection key cannot be recovered");
+    return { code, fingerprint: record.id };
+  }
+  // Paired devices keep their own credentials; only new pairing stops.
+  async withdrawPairing(owner: string) {
+    await this.store.withdrawPairing(owner);
+    return { withdrawn: true };
   }
   async pair(code: string) {
     const token = randomSecret();
@@ -228,7 +351,7 @@ export class Relay {
     const pairing = await this.store.findPairing(id, this.now());
     if (!pairing) throw new RelayError(400, "Pairing code is invalid or expired");
     await this.limit(pairing.owner, "pair", "owner", 10);
-    // The device insert rechecks the code, so one replaced, revoked or expired since the lookup mints nothing.
+    // The device insert rechecks the code, so one replaced, withdrawn or expired since the lookup mints nothing.
     const owner = await this.store.redeemPairing(
       id,
       { id: await hash(token), value: JSON.stringify({ id: deviceId, createdAt: new Date(this.now()).toISOString() }) },

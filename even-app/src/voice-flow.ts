@@ -68,5 +68,8 @@ export function requestFailure(kind: RequestFailure, submission: boolean): strin
     cancelled: "안경에서 앱이 닫히거나 전환되어 서버 요청을 취소했습니다.",
     network: "서버에 연결하지 못했습니다. 네트워크 연결을 확인하세요.",
   }[kind];
-  return submission ? `${cause} 서버 저장 여부는 확인되지 않았습니다.` : cause;
+  // Only this device stopped waiting: a stored utterance is still answered, and its reply is shown when it arrives.
+  return submission
+    ? `${cause} 서버 저장 여부는 확인되지 않았습니다. 저장됐다면 답변 작업은 취소되지 않으며 답변이 오면 표시합니다.`
+    : cause;
 }

@@ -376,3 +376,49 @@ test("D1 unsubscribe compare-and-delete preserves a concurrently verified replac
     db.sqlite.close();
   }
 });
+
+test("D1 acknowledgement insert requires the owner's live, unanswered utterance", async () => {
+  const db = database();
+  try {
+    const store = new D1Store(db);
+    const utterance = (id, status, createdAt = "2026-10-26T00:00:00.000Z") => ({
+      owner: "alice",
+      kind: "utterance",
+      id,
+      value: JSON.stringify({ id, status, createdAt }),
+      expires_at: null,
+    });
+    const ack = (id, owner = "alice") => ({
+      owner,
+      kind: "message",
+      id: `ack_${id}`,
+      value: JSON.stringify({ message_id: `ack_${id}`, utterance_id: id, stage: "ack", seq: 1, text: "볼게요" }),
+      expires_at: null,
+    });
+    const cutoff = "2026-09-26T00:00:00.000Z";
+    await store.insert(utterance("pending", "pending"));
+    await store.insert(utterance("accepted", "accepted"));
+    await store.insert(utterance("replied", "replied"));
+    await store.insert(utterance("expired", "pending", "2026-09-01T00:00:00.000Z"));
+    assert.equal(await store.writeAck(ack("pending"), "pending", cutoff), true);
+    assert.equal(await store.writeAck(ack("pending"), "pending", cutoff), false);
+    assert.equal(await store.writeAck(ack("accepted"), "accepted", cutoff), true);
+    assert.equal(await store.writeAck(ack("replied"), "replied", cutoff), false);
+    assert.equal(await store.writeAck(ack("expired"), "expired", cutoff), false);
+    assert.equal(await store.writeAck(ack("missing"), "missing", cutoff), false);
+    // Another owner's acknowledgement cannot attach to this owner's utterance.
+    assert.equal(await store.writeAck(ack("accepted", "bob"), "accepted", cutoff), false);
+    assert.deepEqual(
+      db.sqlite
+        .prepare("SELECT owner, id FROM relay_records WHERE kind = 'message' ORDER BY id")
+        .all()
+        .map((row) => [row.owner, row.id]),
+      [
+        ["alice", "ack_accepted"],
+        ["alice", "ack_pending"],
+      ],
+    );
+  } finally {
+    db.sqlite.close();
+  }
+});

@@ -12,7 +12,7 @@ G2 microphone → Even Hub companion ⇄ Soniox real-time STT (user's key, direc
                relay → durable utterance
                                                        ↓ signed MCP webhook
                                                   ChatGPT Dot
-                                                       ↓ reply_to_g2
+                                                       ↓ acknowledge_g2_utterance (optional), then reply_to_g2
 G2 display ← Even Hub companion ← authenticated message API ← durable reply
 ```
 
@@ -22,7 +22,9 @@ The companion includes optional phone-local `Hey dots` detection using packaged 
 
 The server implements MCP events. A real Dot has reported an active subscription through the Sites plugin, but event delivery of a spoken utterance and the correlated reply have not been proven. The requested event-driven integration is not complete until an actual Dot subscribes, receives an event, and calls the reply tool. Polling the device response API does not replace that requirement.
 
-Unanswered utterances survive callback failures. Active device polling or resubmitting the same ID can retry delivery with the same event ID, a durable lease, backoff, and at most five attempts. This is request-driven recovery, not a background job guarantee. `get_pending_utterances` accepts an optional `cursor`; follow `next_cursor` until null to inspect the whole unanswered backlog.
+Unanswered utterances survive callback failures. Active device polling or resubmitting the same ID can retry delivery with the same event ID, a durable lease, backoff, and at most five attempts. This is request-driven recovery, not a background job guarantee. A device poll reads stored replies first and returns them; its retry attempt then continues in that request's background (`waitUntil`), so a slow or blocked callback never delays a reply that is already stored. `get_pending_utterances` accepts an optional `cursor`; follow `next_cursor` until null to inspect the whole unanswered backlog.
+
+A reply has two stages per utterance, both over standard `tools/call`. Before work that takes more than a few seconds, the model may call `acknowledge_g2_utterance` with a short reply it wrote for that utterance (at most 500 characters); this does not complete the utterance. `reply_to_g2` stores the final answer and completes it, as before. Each stage has a fixed message ID (`ack_<utterance_id>`, `reply_<utterance_id>`) and sequence number (1, 2). Retrying a stage with identical text is idempotent and different text is rejected with 409. An acknowledgement is stored only while its utterance is live and unanswered, in one conditional statement, so it never follows a final answer, an owner deletion or retention expiry; a late acknowledgement returns `superseded_by_final` without being stored. Device polls omit an acknowledgement once its final answer exists. The relay never writes an acknowledgement on the model's behalf. Whether a host actually calls the acknowledgement before working is a separate integration check.
 
 ## Local development
 

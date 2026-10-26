@@ -345,6 +345,7 @@ class UtteranceGone extends Error {}
 const ERASED =
   "대화 기록이 삭제되어 이 기기에 보이던 답변을 모두 지웠습니다. 입력 중이던 내용은 그대로이며 새 질문을 보낼 수 있습니다.";
 const EXPIRED = "보관 기간이 지난 답변을 이 기기에서도 지웠습니다.";
+const ACK_PENDING = "최종 답변 대기";
 const report = (e: unknown) => status(e instanceof Error ? e.message : "작업을 완료하지 못했습니다.");
 const current = (version: number) => !exited && generation === version;
 function controls(): void {
@@ -501,10 +502,12 @@ function displayStatus(text: string): void {
 }
 /** The message position leads the header, so moving between replies with identical text is still visible. */
 function g2Header(): string {
-  const position =
-    selection.startsWith("reply:") && history.index >= 0 ? `답변 ${history.index + 1}/${history.messages.length}` : "";
+  const reading = selection.startsWith("reply:") && history.index >= 0;
+  const position = reading ? `답변 ${history.index + 1}/${history.messages.length}` : "";
+  // An acknowledgement is the model's first words, not its answer: G2 says the final answer is still coming.
+  const pending = reading && history.selected?.stage === "ack" ? ACK_PENDING : "";
   const note = headerNote?.view === view() ? headerNote.text : "";
-  return Array.from([position, note, wakeLabel].filter(Boolean).join(" · ")).slice(0, 70).join("");
+  return Array.from([position, pending, note, wakeLabel].filter(Boolean).join(" · ")).slice(0, 70).join("");
 }
 function showSelectedReply(): void {
   const reply = history.selected;
@@ -656,8 +659,9 @@ async function poll(): Promise<void> {
         phoneReply = undefined;
         displayText(EXPIRED);
       }
-    } else if (changed && captionHolds()) {
+    } else if (changed && captionHolds() && history.selected!.utterance_id !== caption!.voice.id) {
       // The phone shows the reply now; G2 keeps the running speech and shows the reply when the capture is submitted.
+      // A reply to the capture itself (its acknowledgement or final) answers what the notice is waiting for, below.
       el("reply").textContent = history.selected!.text;
       phoneReply = history.selected!.message_id;
       status(
@@ -666,7 +670,13 @@ async function poll(): Promise<void> {
           : "Dot 답변 수신 · 음성 입력 중이라 G2에는 전송 후 표시합니다.",
       );
     } else if (changed) {
-      status(conversation === "erased" ? `${ERASED} 새 답변을 표시합니다.` : "Dot 답변 수신 · G2 표시를 요청합니다.");
+      status(
+        conversation === "erased"
+          ? `${ERASED} 새 답변을 표시합니다.`
+          : history.selected!.stage === "ack"
+            ? `Dot 응답 수신 · ${ACK_PENDING} · G2 표시를 요청합니다.`
+            : "Dot 답변 수신 · G2 표시를 요청합니다.",
+      );
       showSelectedReply();
     } else if (history.revision !== kept && selection === replyNotice) restoreReader();
     // New replies behind the reader only change the header position; the body keeps its scroll.

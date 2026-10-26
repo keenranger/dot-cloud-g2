@@ -187,6 +187,8 @@ test("a request without a response is described in Korean and a submission's out
     assert.doesNotMatch(send, /[A-Za-z]/, kind);
     assert.ok(send.startsWith(poll), kind);
     assert.match(send, /저장 여부는 확인되지 않았습니다/, kind);
+    // A local cancel or timeout never claims the server-side answer was cancelled.
+    assert.match(send, /답변 작업은 취소되지 않으며/, kind);
     assert.doesNotMatch(poll, /저장/, kind);
   }
   assert.match(requestFailure("cancelled", true), /취소/);

@@ -5,9 +5,20 @@ const textProperty = { type: "string", minLength: 1, maxLength: 8000 };
 const uuid = { type: "string", format: "uuid" };
 export const tools = [
   {
+    name: "acknowledge_g2_utterance",
+    description:
+      "Optional first stage of a reply to an owner's pending Even G2 utterance. Before work that takes more than a few seconds (searching, tools, long reasoning), call this once with a short reply you wrote for this utterance, such as what you are about to do, then call reply_to_g2 with the final answer. Never send a generic receipt such as 'received' or 'working on it'. It does not complete the utterance; only reply_to_g2 does. Retrying with identical text is safe; different text is rejected. After the final reply is stored, an acknowledgement is not stored or shown (superseded_by_final). Receipt confirms durable storage, not physical display. Deleted or expired utterances are unknown.",
+    inputSchema: {
+      type: "object",
+      properties: { utterance_id: uuid, text: { ...textProperty, maxLength: 500 } },
+      required: ["utterance_id", "text"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "reply_to_g2",
     description:
-      "Reply to an owner's pending Even G2 utterance using utterance_id. Receipt confirms durable storage, not physical display. Deleted or expired utterances are unknown.",
+      "Final stage: reply to an owner's pending Even G2 utterance using utterance_id, completing it. If you acknowledged it with acknowledge_g2_utterance, the final reply replaces that acknowledgement on G2. Retrying with identical text is safe; a different second reply is rejected. Receipt confirms durable storage, not physical display. Deleted or expired utterances are unknown.",
     inputSchema: {
       type: "object",
       properties: { utterance_id: uuid, text: textProperty },
@@ -51,7 +62,8 @@ export const tools = [
 ];
 export const eventDefinition = {
   name: "utterance.created",
-  description: "An utterance from an Even G2 paired by this signed-in owner.",
+  description:
+    "An utterance from an Even G2 paired by this signed-in owner. Before long work, acknowledge it with a short reply you wrote (acknowledge_g2_utterance); answer it with reply_to_g2.",
   delivery: ["webhook"],
   inputSchema: {
     type: "object",
@@ -95,6 +107,9 @@ export async function dispatch(
       let result: unknown;
       try {
         switch (input.name) {
+          case "acknowledge_g2_utterance":
+            result = await relay.acknowledge(owner, input.arguments);
+            break;
           case "reply_to_g2":
             result = await relay.reply(owner, input.arguments);
             break;

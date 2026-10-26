@@ -79,7 +79,7 @@ async function getActive() {
   if (!response.ok) throw new Error("pairing state unavailable");
   return ((await response.json()) as { active: ActivePairing }).active;
 }
-const dotPrompt = `G2 Bridge 플러그인의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 입력을 받으면 한국어로 답하고, reply_to_g2 도구에 받은 것과 동일한 utterance_id와 한국어 답변 text를 보내 줘. 이벤트 전달이 실제로 확인되기 전에는 연결되었다고 말하지 마.`;
+const dotPrompt = `G2 Bridge 플러그인의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 입력을 받으면 한국어로 답하고, reply_to_g2 도구에 받은 것과 동일한 utterance_id와 한국어 답변 text를 보내 줘. 검색이나 도구 사용처럼 시간이 걸리는 작업을 하기 전에는 먼저 acknowledge_g2_utterance 도구에 같은 utterance_id와 무엇을 할지 직접 쓴 짧은 한국어 응답을 보내 줘. "접수했습니다" 같은 형식적인 문구는 보내지 마. 이벤트 전달이 실제로 확인되기 전에는 연결되었다고 말하지 마.`;
 
 export default function Dashboard({ displayName }: { displayName: string }) {
   const [origin, setOrigin] = useState("");

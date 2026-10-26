@@ -9,6 +9,7 @@ import { testPairingSecret } from "./helpers/relay.mjs";
 // Test-only module resolution: route code and its D1 store run unchanged, with
 // Cloudflare's environment injected locally. No HTTP or provider calls escape.
 globalThis.__relayTestEnv = { PAIRING_KEY_ENCRYPTION_KEY: testPairingSecret };
+globalThis.__relayBackground = [];
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "cloudflare:workers") return { url: "relay-test:cloudflare", shortCircuit: true };
@@ -23,7 +24,13 @@ registerHooks({
   },
   load(url, context, nextLoad) {
     if (url === "relay-test:cloudflare")
-      return { format: "module", source: "export const env = globalThis.__relayTestEnv;", shortCircuit: true };
+      return {
+        format: "module",
+        // waitUntil keeps background tasks so tests can tell they did not delay the response, then await them.
+        source:
+          "export const env = globalThis.__relayTestEnv; export const waitUntil = (task) => globalThis.__relayBackground.push(task);",
+        shortCircuit: true,
+      };
     return nextLoad(url, context);
   },
 });
@@ -525,4 +532,76 @@ test("one MCP retention call stays within the D1 per-invocation query budget at 
   statements = 0;
   const second = JSON.parse((await tool("frank", "enforce_conversation_retention")).content[0].text);
   assert.deepEqual([second.deleted, second.more, statements], [500, false, 3]);
+});
+
+test("MCP acknowledgement and final reach the device poll, which never waits for a blocked callback", async (t) => {
+  const db = database();
+  globalThis.__relayTestEnv.DB = db;
+  const release = Promise.withResolvers();
+  const attempted = Promise.withResolvers();
+  const delivered = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(new URL(url).hostname, "connectors.api.openai.com");
+    const payload = JSON.parse(options.body);
+    if (payload.type === "verification") return Response.json({ challenge: payload.challenge });
+    delivered.push(payload.data.utterance_id);
+    attempted.resolve();
+    await release.promise;
+    return new Response(null, { status: 204 });
+  };
+  t.after(() => {
+    release.resolve();
+    globalThis.fetch = originalFetch;
+    db.sqlite.close();
+  });
+  const listed = await rpc("alice", "tools/list", {});
+  const ack = listed.result.tools.find((item) => item.name === "acknowledge_g2_utterance");
+  assert.deepEqual(ack.inputSchema.required, ["utterance_id", "text"]);
+  assert.equal(ack.inputSchema.properties.text.maxLength, 500);
+  const alice = await provision("alice", "bob");
+  const bob = await provision("bob", "alice");
+  // Stored before any subscription, so the first callback attempt is made by a poll.
+  const id = randomUUID();
+  assert.equal(
+    (await utterances.POST(deviceRequest(alice.token, "/api/device/utterances", { id, text: "자료 찾아줘" }))).status,
+    200,
+  );
+  const subscribed = await rpc("alice", "events/subscribe", {
+    name: "utterance.created",
+    arguments: { session_id: "g2" },
+    delivery: {
+      mode: "webhook",
+      url: "https://connectors.api.openai.com/alice",
+      secret: `whsec_${Buffer.alloc(32, 7).toString("base64")}`,
+    },
+  });
+  assert(!subscribed.error);
+  assert.equal((await tool("bob", "acknowledge_g2_utterance", { utterance_id: id, text: "침입" })).isError, true);
+  const acked = await tool("alice", "acknowledge_g2_utterance", { utterance_id: id, text: "자료를 찾아볼게요." });
+  assert.equal(JSON.parse(acked.content[0].text).stored_for_g2, true);
+  globalThis.__relayBackground = [];
+  const first = await (await messages.GET(deviceRequest(alice.token, "/api/device/messages"))).json();
+  // The response carried the acknowledgement while the callback attempt it started is still blocked.
+  assert.deepEqual(
+    first.messages.map((m) => [m.message_id, m.stage, m.seq, m.text]),
+    [[`ack_${id}`, "ack", 1, "자료를 찾아볼게요."]],
+  );
+  assert.equal(globalThis.__relayBackground.length, 1);
+  await attempted.promise;
+  assert.deepEqual(delivered, [id]);
+  assert.deepEqual((await (await messages.GET(deviceRequest(bob.token, "/api/device/messages"))).json()).messages, []);
+  assert(!(await tool("alice", "reply_to_g2", { utterance_id: id, text: "찾은 자료입니다." })).isError);
+  const late = await tool("alice", "acknowledge_g2_utterance", { utterance_id: id, text: "자료를 찾아볼게요." });
+  assert.equal(late.isError, undefined);
+  const second = await (await messages.GET(deviceRequest(alice.token, "/api/device/messages"))).json();
+  assert.deepEqual(
+    second.messages.map((m) => [m.message_id, m.stage, m.text]),
+    [[`reply_${id}`, "final", "찾은 자료입니다."]],
+  );
+  release.resolve();
+  await Promise.all(globalThis.__relayBackground);
+  // The callback settled after the reply; the answered utterance stays answered and nothing was sent twice.
+  assert.deepEqual(delivered, [id]);
+  assert.equal(JSON.parse((await tool("alice", "get_pending_utterances")).content[0].text).utterances.length, 0);
 });

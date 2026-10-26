@@ -3,7 +3,11 @@ export interface Reply {
   text: string;
   createdAt: string;
   utterance_id?: string;
+  /** An acknowledgement the model wrote before working, or the final answer; a reply without a stage is final. */
+  stage?: "ack" | "final";
 }
+/** The utterance a final answer completes; acknowledgements and proactive messages complete none. */
+const answers = (item: Reply): string | undefined => (item.stage === "ack" ? undefined : item.utterance_id);
 
 /** Preserve the reader's place while retaining a bounded, deduplicated reply history. */
 export class MessageHistory {
@@ -23,18 +27,27 @@ export class MessageHistory {
   get selected(): Reply | undefined {
     return this.items[this.index];
   }
+  /**
+   * A final answer supersedes its utterance's acknowledgement, whether it arrives in the same batch or later: a kept
+   * acknowledgement leaves and the final joins the end, and an acknowledgement is never added after its final. A
+   * reader on the acknowledgement moves to its final; a reader elsewhere keeps their place.
+   */
   receive(batch: readonly Reply[]): boolean {
     const old = this.selected;
     const following = !old || this.index === this.items.length - 1;
+    const answered = new Set([...this.items, ...batch].map(answers).filter(Boolean));
+    const superseded = (item: Reply) => item.stage === "ack" && answered.has(item.utterance_id);
     const known = new Set(this.items.map((item) => item.message_id));
     const additions = batch.filter((item) => {
-      if (known.has(item.message_id) || this.expired(item)) return false;
+      if (known.has(item.message_id) || this.expired(item) || superseded(item)) return false;
       known.add(item.message_id);
       return true;
     });
     if (!additions.length) return false;
-    this.items = [...this.items, ...additions].slice(-this.capacity);
+    const replaced = old && superseded(old) ? additions.find((item) => answers(item) === old.utterance_id) : undefined;
+    this.items = [...this.items.filter((item) => !superseded(item)), ...additions].slice(-this.capacity);
     if (following) this.selectedId = this.items.at(-1)?.message_id;
+    else if (replaced) this.selectedId = replaced.message_id;
     else if (!this.items.some((item) => item.message_id === this.selectedId))
       this.selectedId = this.items[0]?.message_id;
     this.revision++;

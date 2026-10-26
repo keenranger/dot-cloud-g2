@@ -2013,3 +2013,120 @@ test("a deferred reply survives review mode, cancel and an unknown outcome, but 
     }
   }
 });
+
+// Staged replies (issue #5): the model's acknowledgement before work, then the final answer for the same utterance.
+const ack = (utterance, text, createdAt = "2026-10-26T00:00:01Z") => ({
+  message_id: `ack_${utterance}`,
+  utterance_id: utterance,
+  stage: "ack",
+  seq: 1,
+  text,
+  createdAt,
+});
+const final = (utterance, text, createdAt = "2026-10-26T00:00:02Z") => ({
+  message_id: `reply_${utterance}`,
+  utterance_id: utterance,
+  stage: "final",
+  seq: 2,
+  text,
+  createdAt,
+});
+
+test("the capture's own acknowledgement and final reach G2 while its POST is pending, and the final replaces it", async () => {
+  let settle;
+  const server = { revision: 1, messages: [], post: () => new Promise((resolve) => (settle = resolve)) };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    const socket = await manualCapture(h);
+    await release(h, socket);
+    assert.equal(server.posts.length, 1);
+    const id = server.posts[0].id;
+    assert.equal(bodies(h).at(-1), `${FINISHING}\n내일 일정`);
+    // The model acknowledged this utterance before the submission response came back.
+    server.messages = [ack(id, "내일 일정을 확인해 볼게요.")];
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "내일 일정을 확인해 볼게요.", "the capture's acknowledgement takes G2");
+    assert.match(headers(h).at(-1), /^답변 1\/1 · 최종 답변 대기/, "G2 says the final answer is still coming");
+    assert.match(h.get("status").textContent, /최종 답변 대기/);
+    assert.equal(h.get("reply").textContent, "내일 일정을 확인해 볼게요.");
+    // The relay drops a superseded acknowledgement, but a poll carrying both still shows only the final.
+    server.messages = [ack(id, "내일 일정을 확인해 볼게요."), final(id, "내일 오후 2시에 회의가 있어요.")];
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "내일 오후 2시에 회의가 있어요.");
+    assert.match(headers(h).at(-1), /^답변 1\/1(?! · 최종)/, "one entry per utterance, without the waiting note");
+    assert.equal(h.get("reply").textContent, "내일 오후 2시에 회의가 있어요.");
+    const writes = bodies(h).length;
+    settle(Response.json({ status: "accepted" }));
+    await h.flush();
+    for (let i = 0; i < 2; i++) await h.fire(2500);
+    assert.deepEqual(bodies(h).slice(writes), [], "the late submission response and later polls leave the final");
+    assert.ok(
+      !bodies(h).some((b) => b.includes("서버 저장")),
+      "no waiting notice ever replaces a reply to this utterance",
+    );
+    assert.equal(server.posts.length, 1);
+  } finally {
+    h.restore();
+  }
+});
+
+test("an earlier utterance's acknowledgement and final wait behind live running text, and only the final is shown", async () => {
+  const server = { revision: 1, messages: [] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    const first = await manualCapture(h);
+    await release(h, first);
+    const id = server.posts[0].id;
+    server.messages = [ack(id, "찾아볼게요.")];
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "찾아볼게요.");
+    // A new capture is recording when the earlier utterance's final arrives.
+    const second = await manualCapture(h, "그리고 모레");
+    server.messages = [ack(id, "찾아볼게요."), final(id, "내일은 비 예보가 있어요.")];
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "내일은 비 예보가 있어요.", "the phone shows the final at once");
+    assert.equal(bodies(h).at(-1), `${LIVE}\n그리고 모레`, "live running text keeps the G2 body");
+    await release(h, second, "그리고 모레는");
+    assert.equal(server.posts.length, 2);
+    assert.equal(bodies(h).at(-1), "내일은 비 예보가 있어요.", "the deferred final comes back after submission");
+    assert.match(headers(h).at(-1), /^답변 1\/1(?! · 최종)/);
+    // The acknowledgement was shown before the final, and never again after it.
+    const finalAt = bodies(h).indexOf("내일은 비 예보가 있어요.");
+    assert.ok(!bodies(h).slice(finalAt).includes("찾아볼게요."));
+  } finally {
+    h.restore();
+  }
+});
+
+test("a reader on an older reply keeps it while another utterance's acknowledgement gives way to its final", async () => {
+  const server = {
+    revision: 1,
+    messages: [msg2("a", "첫 답변", day(20)), msg2("b", "둘째 답변", day(21))],
+  };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "둘째 답변");
+    h.get("prev-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "첫 답변");
+    const writes = bodies(h).length;
+    server.messages = [...server.messages, ack("u", "확인할게요.", day(22))];
+    await h.fire(2500);
+    assert.match(headers(h).at(-1), /^답변 1\/3(?! · 최종)/);
+    server.messages = [...server.messages, final("u", "확인했어요.", day(23))];
+    await h.fire(2500);
+    assert.match(
+      headers(h).at(-1),
+      /^답변 1\/3(?! · 최종)/,
+      "the final takes the acknowledgement's place in the count",
+    );
+    assert.deepEqual(bodies(h).slice(writes), [], "the body being read is never replaced");
+    h.get("next-message").onclick();
+    h.get("next-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "확인했어요.");
+  } finally {
+    h.restore();
+  }
+});

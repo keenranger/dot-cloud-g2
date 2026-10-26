@@ -130,6 +130,13 @@ class MemoryStore {
     await this.insert(message);
     return true;
   }
+  async writeAck(message, utteranceId, cutoff) {
+    const utterance = await this.get(message.owner, "utterance", utteranceId);
+    if (!utterance) return false;
+    const value = JSON.parse(utterance.value);
+    if (value.status === "replied" || value.createdAt <= cutoff) return false;
+    return this.insert(message);
+  }
   async compareAndDelete(owner, kind, id, previous) {
     const key = this.key(owner, kind, id);
     if (this.rows.get(key)?.value !== previous) return false;
@@ -824,4 +831,205 @@ test("status reports phone-direct transcription without claiming phone key readi
     assert.equal(value.phoneKeyConfigured, null);
     assert(!JSON.stringify(value).toLowerCase().includes("apikey"));
   }
+});
+
+test("an acknowledgement is shown until its final reply, which completes the utterance and supersedes it", async () => {
+  let now = Date.parse("2026-10-26T00:00:00.000Z");
+  const relay = new TestRelay(new MemoryStore(), undefined, () => now);
+  const alice = await device(relay);
+  const id = randomUUID();
+  await relay.submit(alice, { id, text: "내일 날씨 찾아줘" });
+  now += 1000;
+  assert.deepEqual(await relay.acknowledge("alice", { utterance_id: id, text: "내일 서울 날씨를 찾아볼게요." }), {
+    utterance_id: id,
+    message_id: `ack_${id}`,
+    stage: "ack",
+    stored_for_g2: true,
+    physical_display_confirmed: false,
+  });
+  // The acknowledgement leaves the utterance pending for its final answer.
+  assert.equal((await relay.pending("alice")).length, 1);
+  assert.equal((await relay.status("alice")).pendingCount, 1);
+  let messages = await relay.messages(alice);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].message_id, `ack_${id}`);
+  assert.equal(messages[0].utterance_id, id);
+  assert.equal(messages[0].stage, "ack");
+  assert.equal(messages[0].seq, 1);
+  now += 1000;
+  const final = await relay.reply("alice", { utterance_id: id, text: "내일 서울은 맑고 18도예요." });
+  assert.equal(final.message_id, `reply_${id}`);
+  assert.equal(final.stage, "final");
+  assert.equal((await relay.pending("alice")).length, 0);
+  // Both rows are stored, but a poll that sees the final never carries the acknowledgement again.
+  messages = await relay.messages(alice);
+  assert.deepEqual(
+    messages.map((m) => [m.message_id, m.stage, m.seq]),
+    [[`reply_${id}`, "final", 2]],
+  );
+});
+
+test("acknowledgements are idempotent, reject conflicts, and are never stored or shown after the final", async () => {
+  const relay = new TestRelay(new MemoryStore());
+  const alice = await device(relay);
+  const id = randomUUID();
+  await relay.submit(alice, { id, text: "회의록 요약해줘" });
+  await relay.acknowledge("alice", { utterance_id: id, text: "회의록을 읽고 요약할게요." });
+  const retried = await relay.acknowledge("alice", { utterance_id: id, text: "회의록을 읽고 요약할게요." });
+  assert.equal(retried.stored_for_g2, true);
+  await assert.rejects(
+    relay.acknowledge("alice", { utterance_id: id, text: "다른 짧은 응답" }),
+    (e) => e.status === 409 && /different acknowledgement/.test(e.message),
+  );
+  await assert.rejects(relay.acknowledge("alice", { utterance_id: id, text: "x".repeat(501) }), /too_big/);
+  assert.equal((await relay.messages(alice)).length, 1);
+  await relay.reply("alice", { utterance_id: id, text: "요약입니다." });
+  // The same acknowledgement retried late reports its earlier storage without showing again.
+  assert.equal(
+    (await relay.acknowledge("alice", { utterance_id: id, text: "회의록을 읽고 요약할게요." })).stored_for_g2,
+    true,
+  );
+  assert.deepEqual(
+    (await relay.messages(alice)).map((m) => m.stage),
+    ["final"],
+  );
+
+  // A first acknowledgement after the final is reported as superseded and stores nothing.
+  const late = randomUUID();
+  await relay.submit(alice, { id: late, text: "짧은 질문" });
+  await relay.reply("alice", { utterance_id: late, text: "바로 답변" });
+  assert.deepEqual(await relay.acknowledge("alice", { utterance_id: late, text: "찾아볼게요." }), {
+    utterance_id: late,
+    message_id: `ack_${late}`,
+    stage: "ack",
+    stored_for_g2: false,
+    superseded_by_final: true,
+    physical_display_confirmed: false,
+  });
+  assert.equal(
+    (await relay.messages(alice)).some((m) => m.message_id === `ack_${late}`),
+    false,
+  );
+});
+
+test("acknowledgements stay owner and device scoped and are refused once deleted or expired", async () => {
+  let now = Date.parse("2026-10-26T00:00:00.000Z");
+  const store = new MemoryStore();
+  const relay = new TestRelay(store, undefined, () => now);
+  const alice = await device(relay);
+  const otherAlice = await device(relay);
+  const bob = await device(relay, "bob");
+  const id = randomUUID();
+  await relay.submit(alice, { id, text: "개인 질문" });
+  await assert.rejects(relay.acknowledge("bob", { utterance_id: id, text: "침입" }), (e) => e.status === 404);
+  await relay.acknowledge("alice", { utterance_id: id, text: "확인해 볼게요." });
+  assert.equal((await relay.messages(alice)).length, 1);
+  assert.deepEqual(await relay.messages(otherAlice), []);
+  assert.deepEqual(await relay.messages(bob), []);
+
+  await relay.deleteConversations("alice");
+  await assert.rejects(
+    relay.acknowledge("alice", { utterance_id: id, text: "확인해 볼게요." }),
+    (e) => e.status === 404,
+  );
+  assert.deepEqual(await relay.messages(alice), []);
+
+  const old = randomUUID();
+  await relay.submit(alice, { id: old, text: "오래된 질문" });
+  now += 30 * 86_400_000;
+  await assert.rejects(relay.acknowledge("alice", { utterance_id: old, text: "늦은 응답" }), (e) => e.status === 404);
+  assert.equal(await store.get("alice", "message", `ack_${old}`), null);
+});
+
+test("an acknowledgement racing its final reply never lands after it", async () => {
+  const store = new MemoryStore();
+  const relay = new TestRelay(store);
+  const alice = await device(relay);
+  const id = randomUUID();
+  await relay.submit(alice, { id, text: "경쟁" });
+  // The final commits between the acknowledgement's read and its conditional write.
+  const writeAck = store.writeAck.bind(store);
+  store.writeAck = async (...args) => {
+    await relay.reply("alice", { utterance_id: id, text: "최종" });
+    return writeAck(...args);
+  };
+  const result = await relay.acknowledge("alice", { utterance_id: id, text: "찾아볼게요." });
+  assert.equal(result.stored_for_g2, false);
+  assert.equal(result.superseded_by_final, true);
+  assert.equal(await store.get("alice", "message", `ack_${id}`), null);
+  assert.deepEqual(
+    (await relay.messages(alice)).map((m) => m.text),
+    ["최종"],
+  );
+});
+
+test("a poll returns stored replies without waiting for a blocked event retry, which still runs durably", async () => {
+  const store = new MemoryStore();
+  const entered = deferred();
+  const release = deferred();
+  let sends = 0;
+  let blocked = false;
+  const transport = async (_destination, _id, payload) => {
+    if (payload.type === "verification") return { status: 200, body: JSON.stringify({ challenge: payload.challenge }) };
+    sends++;
+    if (!blocked) return { status: 503, body: "" };
+    entered.resolve();
+    await release.promise;
+    return { status: 200, body: "" };
+  };
+  let now = 1000;
+  const relay = new TestRelay(store, transport, () => now);
+  const alice = await device(relay);
+  const answered = randomUUID();
+  await relay.submit(alice, { id: answered, text: "이미 답한 질문" });
+  await relay.reply("alice", { utterance_id: answered, text: "저장된 답변" });
+  await relay.subscribe("alice", params);
+  const queued = randomUUID();
+  // The first attempt fails during submission, leaving a durable retry for a later poll.
+  assert.equal((await relay.submit(alice, { id: queued, text: "콜백 대기 질문" })).status, "failed");
+  now = JSON.parse((await store.get("alice", "utterance", queued)).value).nextAttemptAt;
+  blocked = true;
+  const background = [];
+  const result = await relay.poll(alice, (task) => background.push(task));
+  // The stored reply came back while the retried callback is still blocked.
+  assert.deepEqual(
+    result.messages.map((m) => m.text),
+    ["저장된 답변"],
+  );
+  assert.equal(background.length, 1);
+  await entered.promise;
+  assert.equal(sends, 2);
+  const leased = JSON.parse((await store.get("alice", "utterance", queued)).value);
+  assert.equal(leased.deliveryAttempts, 2);
+  assert(leased.deliveryLeaseUntil > now);
+  // A second poll meanwhile neither waits nor starts another attempt under the live lease.
+  assert.equal((await relay.poll(alice, (task) => background.push(task))).messages.length, 1);
+  release.resolve();
+  await Promise.all(background);
+  assert.equal(sends, 2);
+  assert.equal(JSON.parse((await store.get("alice", "utterance", queued)).value).status, "accepted");
+});
+
+test("a failing event retry never fails the read of stored replies", async () => {
+  const store = new MemoryStore();
+  const relay = new TestRelay(store);
+  const alice = await device(relay);
+  const id = randomUUID();
+  await relay.submit(alice, { id, text: "질문" });
+  await relay.reply("alice", { utterance_id: id, text: "답변" });
+  store.deliveryCandidate = async () => {
+    throw new Error("D1 unavailable");
+  };
+  const warn = console.warn;
+  const warnings = [];
+  console.warn = (message) => warnings.push(message);
+  try {
+    assert.deepEqual(
+      (await relay.messages(alice)).map((m) => m.text),
+      ["답변"],
+    );
+  } finally {
+    console.warn = warn;
+  }
+  assert.deepEqual(warnings, ["event_retry_failed"]);
 });

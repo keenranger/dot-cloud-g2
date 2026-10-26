@@ -56,7 +56,8 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   const refreshButton = useRef<HTMLButtonElement>(null);
   const pairingButton = useRef<HTMLButtonElement>(null);
   const pairingResult = useRef<HTMLDivElement>(null);
-  // Bumped by every create or revoke so a server check that started earlier cannot overwrite the newer state.
+  // Bumped when a create, revoke or session failure starts or changes the pairing state, so a response or server check
+  // that started earlier cannot overwrite the newer state.
   const pairingVersion = useRef(0);
   // Set when an erase settles so focus moves only once React has re-enabled or replaced the controls.
   const focusAfterDelete = useRef<"success" | "failure" | null>(null);
@@ -66,19 +67,12 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   const [refreshing, setRefreshing] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const refresh = useCallback(async () => {
-    try {
-      const response = await fetch("/api/status", { cache: "no-store" });
-      if (response.status === 401) throw new Error("로그인 세션이 만료되었습니다. 다시 로그인해 주세요.");
-      if (!response.ok) throw new Error("연결 상태를 불러오지 못했습니다. 다시 확인해 주세요.");
-      setStatus((await response.json()) as Status);
-      setError("");
-    } catch (cause) {
-      setStatus(null);
-      setError(cause instanceof Error ? cause.message : "연결 상태를 확인하지 못했습니다.");
-    } finally {
-      setRefreshing(false);
-    }
+  // Erases the code from this tab; keyboard users stay on the control that makes a new code.
+  const dropPairing = useCallback(() => {
+    pairingVersion.current++;
+    clearPairing(tabStorage());
+    if (pairingResult.current?.contains(document.activeElement)) pairingButton.current?.focus();
+    setPairing(null);
   }, []);
   // Shows this tab's saved code only while the signed-in owner's server state names it; anything else erases it.
   const syncPairing = useCallback(async () => {
@@ -94,28 +88,45 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     const restored = await restorePairing(tabStorage(), active);
     if (version === pairingVersion.current) setPairing(restored);
   }, []);
+  // Every refresh re-checks the code against the account now signed in. A failed refresh cannot vouch for the code, so
+  // it is erased, unless a create or revoke started meanwhile and owns the newer state.
+  const refresh = useCallback(async () => {
+    const version = pairingVersion.current;
+    let current = false;
+    try {
+      const response = await fetch("/api/status", { cache: "no-store" });
+      if (response.status === 401) throw new Error("로그인 세션이 만료되었습니다. 다시 로그인해 주세요.");
+      if (!response.ok) throw new Error("연결 상태를 불러오지 못했습니다. 다시 확인해 주세요.");
+      setStatus((await response.json()) as Status);
+      setError("");
+      current = true;
+    } catch (cause) {
+      setStatus(null);
+      setError(cause instanceof Error ? cause.message : "연결 상태를 확인하지 못했습니다.");
+    } finally {
+      setRefreshing(false);
+    }
+    if (current) await syncPairing();
+    else if (version === pairingVersion.current) dropPairing();
+  }, [syncPairing, dropPairing]);
   useEffect(() => {
     // Read the browser URL only after mounting to avoid an SSR mismatch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setOrigin(window.location.origin);
     // Hydrate the dashboard from the authenticated server after mounting.
     void refresh();
-    void syncPairing();
-  }, [refresh, syncPairing]);
+  }, [refresh]);
   useEffect(() => {
     if (!pairing) return;
     const timer = window.setTimeout(
       () => {
-        clearPairing(tabStorage());
-        // The code and its copy button disappear; keep keyboard users on the control that makes a new code.
-        if (pairingResult.current?.contains(document.activeElement)) pairingButton.current?.focus();
-        setPairing(null);
+        dropPairing();
         setMessage("연결 코드가 만료되었습니다. 기기를 연결하려면 새 코드를 만들어 주세요.");
       },
       Math.max(0, Date.parse(pairing.expiresAt) - Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [pairing]);
+  }, [pairing, dropPairing]);
   useEffect(() => {
     if (deleting || !focusAfterDelete.current) return;
     const outcome = focusAfterDelete.current;
@@ -132,7 +143,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     setError("");
     setMessage("");
     setPairing(null);
-    pairingVersion.current++;
+    const version = ++pairingVersion.current;
     try {
       const response = await fetch("/api/pairing", {
         method: "POST",
@@ -141,10 +152,14 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       });
       if (!response.ok) throw new Error("연결 코드를 만들지 못했습니다. 잠시 후 다시 시도해 주세요.");
       const created = (await response.json()) as Pairing;
+      // A revoke or session failure after this create began has withdrawn or hidden its code.
+      if (version !== pairingVersion.current) return;
+      pairingVersion.current++;
       savePairing(tabStorage(), created);
       setPairing(created);
       setMessage("새 연결 코드를 만들었습니다. 이전 코드는 더 이상 쓸 수 없습니다. Even Hub 앱에 입력해 주세요.");
     } catch (cause) {
+      if (version !== pairingVersion.current) return;
       setError(cause instanceof Error ? cause.message : "연결 코드를 만들지 못했습니다.");
       // The server may or may not have replaced the code; show only what it still reports as active.
       await syncPairing();
@@ -155,6 +170,8 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   async function revokeAll() {
     setRevoking(true);
     setError("");
+    // Fences any server check already running; creating is disabled until this settles.
+    pairingVersion.current++;
     try {
       const response = await fetch("/api/devices/revoke", {
         method: "POST",
@@ -163,12 +180,12 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       });
       if (!response.ok) throw new Error("기기 연결을 해제하지 못했습니다.");
       setMessage("내 모든 기기 연결을 해제했습니다. 다시 사용하려면 새 코드로 페어링해 주세요.");
-      pairingVersion.current++;
-      clearPairing(tabStorage());
-      setPairing(null);
+      dropPairing();
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "기기 연결을 해제하지 못했습니다.");
+      // The server may or may not have withdrawn the code; show only what it still reports as active.
+      await syncPairing();
     } finally {
       setRevoking(false);
     }
@@ -286,7 +303,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
             ref={pairingButton}
             type="button"
             className="button primary"
-            disabled={busy}
+            disabled={busy || revoking}
             onClick={() => void createPairing()}
           >
             {busy ? "코드 만드는 중…" : pairing ? "새 연결 코드 만들기" : "연결 코드 만들기"}
@@ -366,7 +383,12 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       {status && status.deviceCount > 0 && (
         <div className="device-actions">
           <p>내 계정에 연결된 기기의 접근을 모두 종료합니다. 다시 사용하려면 새 코드로 페어링해야 합니다.</p>
-          <button type="button" className="button secondary small" disabled={revoking} onClick={() => void revokeAll()}>
+          <button
+            type="button"
+            className="button secondary small"
+            disabled={revoking || busy}
+            onClick={() => void revokeAll()}
+          >
             {revoking ? "연결 해제 중…" : "내 모든 기기 연결 해제"}
           </button>
         </div>

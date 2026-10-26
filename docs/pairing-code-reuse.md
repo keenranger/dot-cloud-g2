@@ -19,8 +19,10 @@ There is no new schema, migration or dependency for this feature. The device pai
 - Deployment `appgdep_6aded29cd89081918876e1d83d3b4c2a`: **SUCCEEDED** at `2026-10-26T04:10:18.947221Z`.
 - Public URL https://hey-dots-g2.keenranger.chatgpt.site; public audience unchanged.
 - The official native helper pushed exact runtime source to the Sites source repository only. No GitHub/origin publication, PR merge or parent PR #6 change is established here.
-- Published source archive identity reported by the deployment coordinator: 1,699,840 bytes, 103 files; SHA-256 `e17d71b19d94c07c2d0455ca3e71f465690e07c415c9dca08795e14a8faeaa37`. A later documentation commit does not change runtime-source provenance.
-- **Local archive mismatch:** direct inspection of `outputs/pairing-recopy/site-final.tar.gz` during this documentation task found 455,709 bytes, 122 tar entries, SHA-256 `b8463117bd47fc6b9abb7603a67a3161c6cf9592123d19f17d71dcfa394f5d35`. It cannot be equated with the reported published archive. Locating the preserved published archive remains an evidence gate; the current file was not changed here.
+- **Sites-accepted archive fields:** native response `archive_format=tar`, content hash `e17d71b19d94c07c2d0455ca3e71f465690e07c415c9dca08795e14a8faeaa37`, size 1,699,840 bytes, `archive_storage.file_count=103`.
+- **Local input:** `outputs/pairing-recopy/site-final.tar.gz`, gzip size 455,709 bytes, SHA-256 `b8463117bd47fc6b9abb7603a67a3161c6cf9592123d19f17d71dcfa394f5d35`. Decompressed raw tar: 1,951,232 bytes, SHA-256 `faeb22d0a06ccef0973b3646364f53f1e3f74a4e8d61814f1d8644074a075630`.
+- Python tar inspection found 244 members: 225 regular files, including 122 macOS AppleDouble `._*` metadata files of 163 bytes each. Excluding those leaves **103 regular payload files**, matching the native storage file count, plus 19 normal directories. The earlier shell listing count was not a complete metadata-aware member inventory.
+- These are different archive representations and metadata accounting, not comparable byte streams. Exact byte equivalence is not asserted or required to establish deployment success. The official save accepted source `426417f`, linked saved version 7, and its deployment succeeded; those native results are authoritative. No evidence of local archive overwrite or deployment corruption was found. No repack, rebuild or redeployment was performed to force matching hashes. Documentation-only commits do not change the runtime-source provenance.
 
 ## Actual verification
 

@@ -56,3 +56,7 @@ In 0.5.0, expiry removes an expired reply from the phone reader even while G2 sh
 ## 0.5.0 Private deployment (2026-10-24)
 
 Sites version 6 deployed successfully on 2026-10-24 at 12:16:10.672605 UTC from signed source `7f48b9c4d217e4e111477c5aed261c08133ed841`. Even Hub CLI upload and read-back confirmed version 0.5.0, build 120792, Private, with no channels. Public store release, beta promotion and policy approval are not established. Artifact: `outputs/dot-cloud-0.5.0.ehpk`, 7,566,491 bytes, SHA-256 `daee63bd8776fbd7c958ae4a1a6759cdfa78abad322a526140cc15ee85dc52c4`. SDK 0.0.16, minimum Even app 2.2.10. See [deployment evidence](../docs/release-0.5.0-deployment.md). Upload is not phone installation or runtime acceptance.
+
+## 0.5.1 candidate (2026-10-26)
+
+Version-only companion change: `even-app/package.json` and `scripts/manifest.mjs` are `0.5.1`; no runtime source changed. The release adds the relay's public [Privacy Notice](https://hey-dots-g2.keenranger.chatgpt.site/privacy) and [Terms of Use](https://hey-dots-g2.keenranger.chatgpt.site/terms). See [release record](../docs/release-0.5.1.md) for the package identity; no upload is implied.

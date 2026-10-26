@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { chatGPTSignInPath, chatGPTSignOutPath, getChatGPTUser } from "./chatgpt-auth";
 import Dashboard from "./components/dashboard";
+import { PolicyLinks } from "./components/policy-page";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,7 @@ export default async function Home() {
       <footer>
         <span>G2 Bridge</span>
         <span>안경과 대화 사이, 필요한 연결만.</span>
+        <PolicyLinks />
       </footer>
     </div>
   );

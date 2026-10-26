@@ -1,4 +1,45 @@
-# Reusable pairing codes — deployment and QA, 2026-10-26
+# Permanent connection key — version 8, 2026-10-26
+
+## Current behavior
+
+New connection keys have **no expiry**. The dashboard starts masked; the signed-in owner explicitly reveals/hides the key and can copy it only while shown. Refresh and a separate browser tab can recover it through an authorized reveal request, without issuing a new key. No plaintext key is written to browser persistent storage; the legacy tab-cache entry is removed. The server stores a SHA-256 lookup identifier and an AES-256-GCM envelope, with a fresh IV and owner/row-bound authenticated data, not plaintext.
+
+Refresh conceals plaintext before awaiting status/owner metadata. Hiding the page invalidates pending reveals; returning requires an owner re-check. Latest-operation fences discard stale reveal successes and failures after rotation, withdrawal or owner-state changes. Rotation and withdrawal use explicit two-step warnings with focus restoration. Nothing automatically reveals or issues a key.
+
+**Migration:** legacy finite hash-only keys are not upgraded or recoverable. They remain redeemable only until their original expiry. Issue one new permanent key to use the new behavior; existing paired devices are preserved. Rotating or withdrawing the connection key prevents future pairing with it but keeps existing devices; revoke-all withdraws the key and devices together. Single-device revocation keeps the key. The separate device credential lifecycle and `{code}` → `{token, deviceId}` contract remain unchanged.
+
+A copied permanent key can pair new devices until rotation/withdrawal, rate limited to 10 per owner per minute. Reveal is same-origin, owner-scoped, no-store and limited to 30 per owner per minute. AES-GCM protects database-only exposure, not a compromised Worker or leaked encryption secret. Missing/invalid encryption configuration fails issue/reveal closed without deleting the old key. Changing/losing the encryption secret makes prior keys unrevealable until rotation, while hash-based redemption remains possible. No schema, migration or dependency was added.
+
+## Version 8 deployment proof
+
+- Runtime source: signed `2be9181a5029401cbb30f9551170c0fe2823366c` (GPG G); initial permanent-key implementation `e93eb236`, followed by final client/focus fences.
+- Existing Sites project `appgprj_6adb099c2f588191a35d9749cda26f1f`, saved version 8: `appgprj_6adb099c2f588191a35d9749cda26f1f~appgver_17c0ca46af048191a15ba6c85a4afa13`.
+- Deployment `appgdep_6adee63739788191805020be59cd62d9`: **SUCCEEDED**, `2026-10-26T05:33:55.611073Z`, environment-set revision 1.
+- URL https://hey-dots-g2.keenranger.chatgpt.site. No GitHub publication/main merge or Even Hub upload is asserted by this Sites deployment record.
+- Native accepted tar: SHA-256 `86e5342b0cd38eff4403fd47339ef756f84748723436996079c22fc04cffef4e`, 1,720,320 bytes, 104 files. These are native accepted-archive fields, not a claim about local gzip byte identity.
+- The existing Private 0.5.0 companion package was not updated by this site deployment. Its connection-code label and unchanged pairing contract remain compatible.
+
+## Final local verification
+
+| Layer | Result | Limit |
+| --- | --- | --- |
+| Final `2be9181` checks | Root 115/115 tests, lint/typecheck/build passed | Companion unchanged; its suite not repeated |
+| Local crypto/SQL/HTTP | Permanent reveal/redeem beyond 10 minutes and one year; tamper/wrong-secret/owner isolation failures; unique IV; rotation/withdrawal; legacy non-promotion; same key still reveals/pairs after 31-day conversation sweep | Controlled clocks, SQLite/Miniflare and synthetic secret, not hosted owner proof |
+| Actual Chrome final candidate | Masked create/reload/new tab; explicit reveal and two manual copies; refresh masks before response; metadata-pending reveal disabled; reveal503 focus; deliberate navigation retained; rotate/withdraw cancel focus | Disposable local identity/database; keyboard/AX, not spoken AT |
+| Actual Chrome races | Old reveal401 cannot erase newer rotation; late successful reveal after rotation/withdrawal or owner-null stays hidden; repeated actual local redemption yields distinct devices; revoke-all cleans up | Owner response fixtures are not real account switching |
+| Reviews | Opus initial crypto/server review clean; independent Codex final repair review clean | Review and browser evidence are separate; initial113 count is superseded by final115 |
+
+**Actual tab visibility/BFCache testing remains BLOCKED/unrun.** Browser tab activation was unsupported; bounded native attempts were rejected when the user changed Chrome. No visibility transition, pending-reveal-after-restore or BFCache pass is claimed. Source and helper fence tests do not substitute for that browser gate. Initial browser failures and their final corrections remain preserved.
+
+Hosted authenticated issue/reveal/redeem, hosted D1 semantics/quota, real account switching, spoken assistive technology, phone/G2/BLE, optical/provider behavior and Mac-off operation remain unproved. Successful deployment does not close these gates. Daily conversation cleanup is still inactive.
+
+Detailed local evidence: `outputs/pairing-permanent/report.md`, `client-fixes.md`, `client-fixes-final-checks.txt`, `http-smoke.txt`, `review-opus.md`, and `browser/report.md` with `browser/SHA256SUMS`. Only this summary is tracked; raw keys, encryption secrets, tokens, databases and full browser artifacts are not published here.
+
+---
+
+The following version 7 record is historical. Its fixed 600-second key policy and sessionStorage cache were superseded by version 8 above; its deployment identities and observations remain dated evidence.
+
+# Historical version 7: finite reusable codes — 2026-10-26
 
 ## User behavior
 

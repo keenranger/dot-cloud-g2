@@ -113,7 +113,7 @@ Maximize applicable verification before handing remaining work to physical-devic
 
 ### Use the official Even Hub simulator
 
-Local verification includes preparing and running the official simulator. If it is missing, use a versioned, task-local installation or cache through the native package manager; do not stop at a failed PATH lookup or scan unrelated home directories. Verify the official publisher, selected version and supported commands before use. Do not change global settings, application dependencies or lifecycle-script policy merely to make verification pass.
+Local verification includes preparing and running the official simulator. If it is missing, use a versioned, task-local installation or cache through the native package manager; do not stop at a failed PATH lookup or scan unrelated home directories. Verify the official publisher, selected version and supported commands before use. Before package installation, create a standalone temporary package outside the repository/workspace; an empty outputs directory can make pnpm select the enclosing parent project. Do not change global settings, application dependencies or lifecycle-script policy merely to make verification pass.
 
 Run the exact candidate's built companion against an isolated local relay or controlled fixtures. Exercise startup, Korean and long text, running captions, reply navigation and supported gesture events. Test display rejection and delayed acknowledgements in the actual-entry-point harness when the simulator cannot inject them. Use only automation capabilities documented by the installed simulator; do not invent endpoints or treat unsupported scenarios as passed.
 

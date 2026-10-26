@@ -49,8 +49,8 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   const deleteTrigger = useRef<HTMLButtonElement>(null);
   const deletePrompt = useRef<HTMLParagraphElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
-  // Set after a successful erase so focus moves only once the follow-up refresh has rendered.
-  const focusAfterDelete = useRef(false);
+  // Set when an erase settles so focus moves only once React has re-enabled or replaced the controls.
+  const focusAfterDelete = useRef<"success" | "failure" | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [busy, setBusy] = useState(false);
@@ -80,9 +80,13 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   }, [refresh]);
   useEffect(() => {
     if (deleting || !focusAfterDelete.current) return;
-    focusAfterDelete.current = false;
+    const outcome = focusAfterDelete.current;
+    focusAfterDelete.current = null;
+    // Disabling the pressed button drops focus to the body; keep any place the user moved to meanwhile.
+    if (document.activeElement && document.activeElement !== document.body) return;
+    // After a failure the warning stays open so retry and cancel are the next Tab stops.
     // A failed refresh hides the deletion group, so fall back to the always-present refresh control.
-    (deleteTrigger.current ?? refreshButton.current)?.focus();
+    ((outcome === "failure" ? deletePrompt.current : null) ?? deleteTrigger.current ?? refreshButton.current)?.focus();
   }, [deleting]);
 
   async function createPairing() {
@@ -151,9 +155,10 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         `서버의 대화 기록 ${result.utterances + result.messages}건을 삭제했습니다. 기기 연결과 Dot 구독은 그대로입니다.`,
       );
       setConfirmingDelete(false);
-      focusAfterDelete.current = true;
+      focusAfterDelete.current = "success";
       await refresh();
     } catch (cause) {
+      focusAfterDelete.current = "failure";
       setError(cause instanceof Error ? cause.message : "대화 기록을 삭제하지 못했습니다.");
     } finally {
       setDeleting(false);

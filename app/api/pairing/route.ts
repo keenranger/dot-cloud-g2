@@ -8,3 +8,21 @@ export async function POST(request: Request) {
     return failure(error);
   }
 }
+export async function GET(request: Request) {
+  try {
+    const owner = ownerIdentity(request);
+    return json({ active: await runtime().relay.activePairing(owner) });
+  } catch (error) {
+    return failure(error);
+  }
+}
+// Withdraws the connection key only; devices already paired stay connected.
+export async function DELETE(request: Request) {
+  try {
+    requireSameOrigin(request);
+    const owner = ownerIdentity(request);
+    return json(await runtime().relay.withdrawPairing(owner));
+  } catch (error) {
+    return failure(error);
+  }
+}

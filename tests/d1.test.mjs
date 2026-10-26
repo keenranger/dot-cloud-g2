@@ -2,19 +2,32 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { database } from "./helpers/d1.mjs";
 import { D1Store } from "../lib/relay/store.ts";
-import { Relay } from "../lib/relay/core.ts";
+import { hash } from "../lib/relay/core.ts";
+import { TestRelay } from "./helpers/relay.mjs";
 
-test("D1 migration and atomic pairing consumption, owner isolation and CAS", async () => {
+test("D1 migration, permanent reusable connection key, owner isolation and CAS", async () => {
   const db = database();
   try {
+    let now = 1000;
     const store = new D1Store(db);
-    const relay = new Relay(store);
+    const relay = new TestRelay(store, undefined, () => now);
     const code = (await relay.pairing("alice")).code;
     const results = await Promise.allSettled([relay.pair(code), relay.pair(code)]);
-    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-    const paired = results.find((result) => result.status === "fulfilled").value;
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 2);
+    const paired = results[0].value;
     assert.equal((await relay.authenticate(paired.token)).owner, "alice");
+    assert.equal((await relay.authenticate(results[1].value.token)).owner, "alice");
+    assert.equal((await store.list("alice", "device")).length, 2);
     assert.equal((await store.list("bob", "device")).length, 0);
+    assert.equal((await store.list("alice", "pairing"))[0].expires_at, null);
+    // No expiry: the same key pairs and reveals after the former 10-minute window and much later.
+    for (now of [601_000, 601_000 + 400 * 86_400_000]) {
+      assert.equal((await relay.authenticate((await relay.pair(code)).token)).owner, "alice");
+      assert.equal((await relay.revealPairing("alice")).code, code);
+      assert.equal((await relay.activePairing("alice")).revealable, true);
+    }
+    await assert.rejects(relay.revealPairing("bob"), (e) => e.status === 404);
+    assert.equal(await relay.activePairing("bob"), null);
     const record = { owner: "alice", kind: "test", id: "1", value: '"initial"', expires_at: null };
     await store.insert(record);
     assert.equal(await store.compareAndSwap({ ...record, value: '"new"' }, '"initial"'), true);
@@ -23,6 +36,107 @@ test("D1 migration and atomic pairing consumption, owner isolation and CAS", asy
     assert.equal(await store.get("bob", "test", "1"), null);
     await relay.revoke("alice");
     await assert.rejects(relay.authenticate(paired.token), /Invalid device token/);
+    await assert.rejects(relay.pair(code), /invalid or expired/);
+  } finally {
+    db.sqlite.close();
+  }
+});
+
+test("D1 new pairing code replaces the owner's codes atomically and a stale redemption creates no device", async () => {
+  const db = database();
+  try {
+    const store = new D1Store(db);
+    const relay = new TestRelay(store, undefined, () => 1000);
+    const bobs = await relay.pairing("bob");
+    const first = await relay.pairing("alice");
+    const kept = await relay.pair(first.code);
+    const issued = await Promise.all([relay.pairing("alice"), relay.pairing("alice")]);
+    // Concurrent issues serialize: exactly one code survives and it is the one reported as active.
+    assert.equal((await store.list("alice", "pairing")).length, 1);
+    const winners = [];
+    for (const p of issued)
+      winners.push(
+        await relay.pair(p.code).then(
+          () => p,
+          () => null,
+        ),
+      );
+    assert.equal(winners.filter(Boolean).length, 1);
+    assert.equal((await relay.activePairing("alice")).fingerprint, await hash(winners.find(Boolean).code));
+    await assert.rejects(relay.pair(first.code), /invalid or expired/);
+    assert.equal((await relay.authenticate(kept.token)).owner, "alice");
+    assert.equal((await relay.authenticate((await relay.pair(bobs.code)).token)).owner, "bob");
+    // A code replaced between lookup and insert must not mint a device.
+    const stale = await relay.pairing("alice");
+    const racing = new TestRelay(
+      Object.assign(Object.create(store), {
+        async findPairing(id, now) {
+          const found = await store.findPairing(id, now);
+          await relay.pairing("alice");
+          return found;
+        },
+      }),
+      undefined,
+      () => 1000,
+    );
+    const before = (await store.list("alice", "device")).length;
+    await assert.rejects(racing.pair(stale.code), /invalid or expired/);
+    assert.equal((await store.list("alice", "device")).length, before);
+    await relay.revoke("alice");
+    assert.equal((await store.list("alice", "pairing")).length, 0);
+    assert.equal((await store.list("bob", "pairing")).length, 1);
+  } finally {
+    db.sqlite.close();
+  }
+});
+
+test("D1 withdraw keeps devices, earlier codes keep their expiry, and a reveal racing a rotation stays consistent", async () => {
+  const db = database();
+  try {
+    let now = 1000;
+    const store = new D1Store(db);
+    const relay = new TestRelay(store, undefined, () => now);
+    const first = await relay.pairing("alice");
+    const bobs = await relay.pairing("bob");
+    const kept = await relay.pair(first.code);
+    await relay.withdrawPairing("alice");
+    await assert.rejects(relay.pair(first.code), /invalid or expired/);
+    assert.equal(await relay.activePairing("alice"), null);
+    assert.equal((await relay.authenticate(kept.token)).owner, "alice");
+    assert.equal((await relay.revealPairing("bob")).code, bobs.code);
+    // A row written by the earlier implementation still redeems only until its original expiry.
+    const legacy = "d".repeat(64);
+    db.sqlite
+      .prepare("INSERT INTO relay_records (owner,kind,id,value,expires_at) VALUES ('alice','pairing',?,'{}',?)")
+      .run(await hash(legacy), 1000 + 600_000);
+    assert.equal((await relay.activePairing("alice")).revealable, false);
+    await assert.rejects(relay.revealPairing("alice"), (e) => e.status === 409);
+    await relay.pair(legacy);
+    now = 1000 + 600_000;
+    await assert.rejects(relay.pair(legacy), /invalid or expired/);
+    assert.equal(await relay.activePairing("alice"), null);
+    // Missing configuration never removes the key in place.
+    const second = await relay.pairing("alice");
+    const unconfigured = new TestRelay(store, undefined, () => now, null);
+    await assert.rejects(unconfigured.pairing("alice"), (e) => e.status === 503);
+    assert.equal((await relay.revealPairing("alice")).code, second.code);
+    // A rotation between the reveal's read and its reply: the reply names the key it read, which no longer pairs.
+    const racing = new TestRelay(
+      Object.assign(Object.create(store), {
+        async activePairing(owner, at) {
+          const found = await store.activePairing(owner, at);
+          await relay.pairing("alice");
+          return found;
+        },
+      }),
+      undefined,
+      () => now,
+    );
+    const revealed = await racing.revealPairing("alice");
+    assert.equal(revealed.fingerprint, await hash(revealed.code));
+    assert.equal(revealed.code, second.code);
+    assert.notEqual((await relay.activePairing("alice")).fingerprint, revealed.fingerprint);
+    await assert.rejects(relay.pair(revealed.code), /invalid or expired/);
   } finally {
     db.sqlite.close();
   }
@@ -94,7 +208,7 @@ test("D1 message reads are bounded, device scoped, indexed and retain pending ac
       value: JSON.stringify({ id: "done", text: "끝", status: "replied", createdAt: new Date().toISOString() }),
       expires_at: null,
     });
-    const fresh = new Relay(new D1Store(db));
+    const fresh = new TestRelay(new D1Store(db));
     assert.equal((await fresh.pending("alice")).length, 1);
     assert.equal((await fresh.status("alice")).pendingCount, 1);
     const plans = db.sqlite
@@ -196,7 +310,7 @@ test("D1 retry candidate skips exhausted/backoff/in-flight items and pagination 
     assert.equal(await store.deliveryCandidate("bob", "device-one", 1000), null);
     assert.equal((await store.deliveryCandidate("alice", "device-one", 2000)).id, ids[20]);
     // These rows are dated from the epoch; read them with a clock inside the retention window.
-    const relay = new Relay(store, undefined, () => 25_000);
+    const relay = new TestRelay(store, undefined, () => 25_000);
     const one = await relay.pendingPage("alice");
     const two = await relay.pendingPage("alice", one.next_cursor);
     const three = await relay.pendingPage("alice", two.next_cursor);
@@ -228,7 +342,7 @@ test("D1 unsubscribe compare-and-delete preserves a concurrently verified replac
       }
     }
     const store = new RacingStore(db);
-    const relay = new Relay(store, async (_destination, _id, payload) => ({
+    const relay = new TestRelay(store, async (_destination, _id, payload) => ({
       status: 200,
       body: JSON.stringify({ challenge: payload.challenge }),
     }));

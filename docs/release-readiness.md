@@ -91,7 +91,7 @@ A verified uploaded 0.5.0 Private package exists from `7f48b9c`; paste these rev
 
 > **What it is.** Lens MCP for G2 is an independent companion that connects the user's own ChatGPT Dot to G2 through MCP. It is not an official Even Realities app and not a general-purpose MCP client.
 >
-> **Setup.** Sign in to the relay with ChatGPT and create a one-time pairing code. Enter the relay origin and the code in the companion. Pairing is saved through SDK local storage. Typed messages work right after pairing.
+> **Setup.** Sign in to the relay with ChatGPT and create a pairing code (reusable until it expires 10 minutes after creation; a new code replaces it). Enter the relay origin and the code in the companion. Pairing is saved through SDK local storage. Typed messages work right after pairing.
 >
 > **Speech key (bring your own).** No API key or secret is bundled in the package. Voice transcription uses a Soniox key that each user enters on their own phone. By default the key is held in memory for the session only. It is saved through SDK local storage only if the user selects remember on this device, and it can be cleared or replaced at any time. Audio streams from the phone directly to `wss://stt-rt.soniox.com`. The relay never receives the key or audio, and its server-side transcription endpoint is disabled. Without a key, voice controls show a notice instead of opening the microphone.
 >

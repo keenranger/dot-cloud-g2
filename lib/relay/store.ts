@@ -166,11 +166,44 @@ export class D1Store implements Store {
       .first();
     return !!record;
   }
-  consumePairing(id: string, now: number) {
+  async replacePairing(r: RecordValue) {
+    // D1 batch is transactional: concurrent issues serialize, leaving exactly one code per owner.
+    await this.db.batch([
+      this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'pairing'").bind(r.owner),
+      this.db
+        .prepare("INSERT INTO relay_records (owner,kind,id,value,expires_at) VALUES (?,?,?,?,?)")
+        .bind(r.owner, r.kind, r.id, r.value, r.expires_at),
+    ]);
+  }
+  async withdrawPairing(owner: string) {
+    await this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'pairing'").bind(owner).run();
+  }
+  // Connection keys have no expiry (NULL); codes issued before them stay valid only until their original expiry.
+  activePairing(owner: string, now: number) {
     return this.db
-      .prepare("DELETE FROM relay_records WHERE kind = 'pairing' AND id = ? AND expires_at > ? RETURNING *")
+      .prepare(
+        "SELECT * FROM relay_records WHERE owner = ? AND kind = 'pairing' AND (expires_at IS NULL OR expires_at > ?) LIMIT 1",
+      )
+      .bind(owner, now)
+      .first<RecordValue>();
+  }
+  findPairing(id: string, now: number) {
+    return this.db
+      .prepare(
+        "SELECT * FROM relay_records WHERE kind = 'pairing' AND id = ? AND (expires_at IS NULL OR expires_at > ?)",
+      )
       .bind(id, now)
       .first<RecordValue>();
+  }
+  async redeemPairing(id: string, device: { id: string; value: string }, now: number) {
+    // One statement: the device row exists only if the code was still valid when it was written.
+    const record = await this.db
+      .prepare(
+        "INSERT OR IGNORE INTO relay_records (owner,kind,id,value,expires_at) SELECT owner,'device',?,?,NULL FROM relay_records WHERE kind = 'pairing' AND id = ? AND (expires_at IS NULL OR expires_at > ?) LIMIT 1 RETURNING owner",
+      )
+      .bind(device.id, device.value, id, now)
+      .first<{ owner: string }>();
+    return record?.owner ?? null;
   }
   async revokeDevices(owner: string, deviceId?: string) {
     if (deviceId)
@@ -178,7 +211,12 @@ export class D1Store implements Store {
         .prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'device' AND json_extract(value, '$.id') = ?")
         .bind(owner, deviceId)
         .run();
-    else await this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'device'").bind(owner).run();
+    // Disconnecting every device also withdraws the connection key, in the same transaction.
+    else
+      await this.db.batch([
+        this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'device'").bind(owner),
+        this.db.prepare("DELETE FROM relay_records WHERE owner = ? AND kind = 'pairing'").bind(owner),
+      ]);
   }
   async eraseConversations(owner: string, at: string) {
     // One transaction: text-free tombstones, deletion, and the revision companions use to drop cached history.

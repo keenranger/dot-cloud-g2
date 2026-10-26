@@ -476,3 +476,20 @@ textarea {
   font-size: 12px;
   margin: 0;
 }
+.pairing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+.pairing-confirm {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pairing-confirm p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}

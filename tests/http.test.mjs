@@ -4,10 +4,11 @@ import { registerHooks } from "node:module";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { database } from "./helpers/d1.mjs";
+import { testPairingSecret } from "./helpers/relay.mjs";
 
 // Test-only module resolution: route code and its D1 store run unchanged, with
 // Cloudflare's environment injected locally. No HTTP or provider calls escape.
-globalThis.__relayTestEnv = {};
+globalThis.__relayTestEnv = { PAIRING_KEY_ENCRYPTION_KEY: testPairingSecret };
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "cloudflare:workers") return { url: "relay-test:cloudflare", shortCircuit: true };
@@ -28,6 +29,7 @@ registerHooks({
 });
 const identity = await import("../app/api/identity/route.ts");
 const pairing = await import("../app/api/pairing/route.ts");
+const reveal = await import("../app/api/pairing/reveal/route.ts");
 const pair = await import("../app/api/device/pair/route.ts");
 const utterances = await import("../app/api/device/utterances/route.ts");
 const messages = await import("../app/api/device/messages/route.ts");
@@ -228,6 +230,101 @@ test("HTTP and actual D1 isolate two signed-in tenants, ignoring body and device
   const speech = await transcribe.POST(deviceRequest(alice.token, "/api/device/transcribe", {}));
   assert.equal(speech.status, 503);
   assert.match((await speech.json()).error, /Per-user/);
+});
+
+test("connection key state is Sites-owner scoped metadata; reveal is explicit, same-origin, no-store and owner-only", async (t) => {
+  globalThis.__relayTestEnv.DB = database();
+  t.after(() => globalThis.__relayTestEnv.DB.sqlite.close());
+  assert.equal((await pairing.GET(new Request("https://relay.test/api/pairing"))).status, 401);
+  const anonymous = { method: "POST", headers: { Origin: "https://relay.test" } };
+  assert.equal((await reveal.POST(new Request("https://relay.test/api/pairing/reveal", anonymous))).status, 401);
+  assert.deepEqual(await (await pairing.GET(ownerRequest("alice", "/api/pairing"))).json(), { active: null });
+  const issued = await (await pairing.POST(ownerRequest("alice", "/api/pairing", {}))).json();
+  assert.deepEqual(Object.keys(issued).sort(), ["code", "createdAt"]);
+  const stateResponse = await pairing.GET(ownerRequest("alice", "/api/pairing", undefined, { "x-owner-id": "bob" }));
+  assert.equal(stateResponse.headers.get("Cache-Control"), "no-store");
+  const state = await stateResponse.json();
+  assert.deepEqual(state.active, {
+    fingerprint: state.active.fingerprint,
+    createdAt: issued.createdAt,
+    revealable: true,
+    expiresAt: null,
+  });
+  assert(!JSON.stringify(state).includes(issued.code));
+  assert.deepEqual(await (await pairing.GET(ownerRequest("bob", "/api/pairing"))).json(), { active: null });
+  // Reveal requires the page's own origin; a cross-site or originless POST is refused.
+  for (const origin of [undefined, "https://evil.test"]) {
+    const headers = { "oai-authenticated-user-id": "alice", ...(origin ? { Origin: origin } : {}) };
+    const refused = await reveal.POST(
+      new Request("https://relay.test/api/pairing/reveal", { method: "POST", headers }),
+    );
+    assert.equal(refused.status, 403);
+    assert(!(await refused.text()).includes(issued.code));
+  }
+  const shown = await reveal.POST(ownerRequest("alice", "/api/pairing/reveal", {}, { "x-owner-id": "bob" }));
+  assert.equal(shown.status, 200);
+  assert.equal(shown.headers.get("Cache-Control"), "no-store");
+  assert.deepEqual(await shown.json(), { code: issued.code, fingerprint: state.active.fingerprint });
+  const bobs = await reveal.POST(
+    ownerRequest("bob", "/api/pairing/reveal", {}, { "oai-authenticated-user-id": "bob" }),
+  );
+  assert.equal(bobs.status, 404);
+  assert(!(await bobs.text()).includes(issued.code));
+  const first = await (await pair.POST(deviceRequest("unused", "/api/device/pair", { code: issued.code }))).json();
+  const second = await (await pair.POST(deviceRequest("unused", "/api/device/pair", { code: issued.code }))).json();
+  assert.deepEqual(Object.keys(first).sort(), ["deviceId", "token"]);
+  assert.notEqual(first.token, second.token);
+  // Rotating invalidates the old key; existing devices remain.
+  const replacement = await (await pairing.POST(ownerRequest("alice", "/api/pairing", {}))).json();
+  assert.equal((await pair.POST(deviceRequest("unused", "/api/device/pair", { code: issued.code }))).status, 400);
+  assert.equal(
+    (await (await reveal.POST(ownerRequest("alice", "/api/pairing/reveal", {}))).json()).code,
+    replacement.code,
+  );
+  assert.equal((await (await status.GET(ownerRequest("alice", "/api/status"))).json()).deviceCount, 2);
+  assert.equal((await pair.POST(deviceRequest("unused", "/api/device/pair", { code: replacement.code }))).status, 200);
+  // Withdrawing is same-origin, stops new pairing and keeps devices.
+  const withdrawRequest = (headers) =>
+    new Request("https://relay.test/api/pairing", {
+      method: "DELETE",
+      headers: { "oai-authenticated-user-id": "alice", ...headers },
+    });
+  assert.equal((await pairing.DELETE(withdrawRequest({}))).status, 403);
+  assert.equal((await pair.POST(deviceRequest("unused", "/api/device/pair", { code: replacement.code }))).status, 200);
+  assert.deepEqual(await (await pairing.DELETE(withdrawRequest({ Origin: "https://relay.test" }))).json(), {
+    withdrawn: true,
+  });
+  assert.equal((await pair.POST(deviceRequest("unused", "/api/device/pair", { code: replacement.code }))).status, 400);
+  assert.equal((await reveal.POST(ownerRequest("alice", "/api/pairing/reveal", {}))).status, 404);
+  assert.equal((await (await status.GET(ownerRequest("alice", "/api/status"))).json()).deviceCount, 4);
+  assert.equal((await messages.GET(deviceRequest(first.token, "/api/device/messages"))).status, 200);
+});
+
+test("without the connection-key secret, issue and reveal fail closed while pairing, status and the old key keep working", async (t) => {
+  globalThis.__relayTestEnv.DB = database();
+  const configured = globalThis.__relayTestEnv.PAIRING_KEY_ENCRYPTION_KEY;
+  t.after(() => {
+    globalThis.__relayTestEnv.PAIRING_KEY_ENCRYPTION_KEY = configured;
+    globalThis.__relayTestEnv.DB.sqlite.close();
+  });
+  const issued = await (await pairing.POST(ownerRequest("alice", "/api/pairing", {}))).json();
+  for (const value of [undefined, "not-a-key"]) {
+    globalThis.__relayTestEnv.PAIRING_KEY_ENCRYPTION_KEY = value;
+    assert.equal((await pairing.POST(ownerRequest("alice", "/api/pairing", {}))).status, 503);
+    const shown = await reveal.POST(ownerRequest("alice", "/api/pairing/reveal", {}));
+    assert.equal(shown.status, 503);
+    assert(!(await shown.text()).includes(issued.code));
+    assert.equal((await pair.POST(deviceRequest("unused", "/api/device/pair", { code: issued.code }))).status, 200);
+    assert.equal((await status.GET(ownerRequest("alice", "/api/status"))).status, 200);
+    assert.equal((await (await pairing.GET(ownerRequest("alice", "/api/pairing"))).json()).active.revealable, true);
+  }
+  // A key sealed under one secret is reported unrecoverable under another, and is not removed.
+  globalThis.__relayTestEnv.PAIRING_KEY_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString("base64");
+  assert.equal((await pairing.POST(ownerRequest("alice", "/api/pairing", {}))).status, 200);
+  const sealedUnderOther = await (await pairing.GET(ownerRequest("alice", "/api/pairing"))).json();
+  globalThis.__relayTestEnv.PAIRING_KEY_ENCRYPTION_KEY = configured;
+  assert.equal((await reveal.POST(ownerRequest("alice", "/api/pairing/reveal", {}))).status, 409);
+  assert.deepEqual(await (await pairing.GET(ownerRequest("alice", "/api/pairing"))).json(), sealedUnderOther);
 });
 
 test("MCP 2026-07-28 requests with per-request _meta subscribe, clamp TTL, and return complete results", async (t) => {

@@ -17,6 +17,7 @@ A copied permanent key can pair new devices until rotation/withdrawal, rate limi
 - Deployment `appgdep_6adee63739788191805020be59cd62d9`: **SUCCEEDED**, `2026-10-26T05:33:55.611073Z`, environment-set revision 1.
 - URL https://hey-dots-g2.keenranger.chatgpt.site. No GitHub publication/main merge or Even Hub upload is asserted by this Sites deployment record.
 - Native accepted tar: SHA-256 `86e5342b0cd38eff4403fd47339ef756f84748723436996079c22fc04cffef4e`, 1,720,320 bytes, 104 files. These are native accepted-archive fields, not a claim about local gzip byte identity.
+- Post-deployment read-only smoke: homepage HTTP 200 and unauthenticated GET `/api/pairing` HTTP 401. No production key/device mutation; these checks do not prove authenticated reveal or pairing.
 - The existing Private 0.5.0 companion package was not updated by this site deployment. Its connection-code label and unchanged pairing contract remain compatible.
 
 ## Final local verification

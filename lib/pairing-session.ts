@@ -61,3 +61,22 @@ export async function restorePairing(storage: PairingStorage | null, active: Act
   }
   return null;
 }
+// Each pairing operation takes a number from `latest` when it starts. A check changes the stored code only while no
+// operation started after it, so the latest-started check decides; `undefined` means a newer operation took over.
+export async function checkPairing(
+  storage: PairingStorage | null,
+  latest: { current: number },
+  getActive: () => Promise<ActivePairing>,
+  version = ++latest.current,
+) {
+  if (version !== latest.current) return undefined;
+  let active: ActivePairing = null;
+  try {
+    active = await getActive();
+  } catch {
+    active = null;
+  }
+  if (version !== latest.current) return undefined;
+  const restored = await restorePairing(storage, active);
+  return version === latest.current ? restored : undefined;
+}

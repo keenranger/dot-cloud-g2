@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type ActivePairing, type Pairing, clearPairing, restorePairing, savePairing } from "@/lib/pairing-session";
+import { type ActivePairing, type Pairing, checkPairing, clearPairing, savePairing } from "@/lib/pairing-session";
 
 type DeliveryCategory =
   | "accepted"
@@ -43,6 +43,9 @@ function tabStorage() {
     return null;
   }
 }
+const copied = "복사했습니다.";
+const copyUnavailable = "자동 복사를 사용할 수 없습니다. 표시된 내용을 직접 선택해 복사해 주세요.";
+const createdNotice = "새 연결 코드를 만들었습니다. 이전 코드는 더 이상 쓸 수 없습니다. Even Hub 앱에 입력해 주세요.";
 const dotPrompt = `G2 Bridge 플러그인의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 입력을 받으면 한국어로 답하고, reply_to_g2 도구에 받은 것과 동일한 utterance_id와 한국어 답변 text를 보내 줘. 이벤트 전달이 실제로 확인되기 전에는 연결되었다고 말하지 마.`;
 
 export default function Dashboard({ displayName }: { displayName: string }) {
@@ -56,42 +59,56 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   const refreshButton = useRef<HTMLButtonElement>(null);
   const pairingButton = useRef<HTMLButtonElement>(null);
   const pairingResult = useRef<HTMLDivElement>(null);
-  // Bumped when a create, revoke or session failure starts or changes the pairing state, so a response or server check
-  // that started earlier cannot overwrite the newer state.
+  // Bumped when a create, revoke, refresh or server check starts, or a session failure erases the code, so a server
+  // check that started earlier cannot overwrite the newer state.
   const pairingVersion = useRef(0);
   // Set when an erase settles so focus moves only once React has re-enabled or replaced the controls.
   const focusAfterDelete = useRef<"success" | "failure" | null>(null);
+  // Set when the code area disappears while focused, so focus moves once the create control is enabled again.
+  const focusAfterHide = useRef(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  // Erases the code from this tab; keyboard users stay on the control that makes a new code.
+  // Hides the code; keyboard users land on the control that makes a new code, and notices about the code go with it.
+  const hidePairing = useCallback(() => {
+    if (pairingResult.current) {
+      setMessage((current) => ([copied, copyUnavailable, createdNotice].includes(current) ? "" : current));
+      if (pairingResult.current.contains(document.activeElement)) focusAfterHide.current = true;
+    }
+    setPairing(null);
+  }, []);
+  // Erases the code from this tab.
   const dropPairing = useCallback(() => {
     pairingVersion.current++;
     clearPairing(tabStorage());
-    if (pairingResult.current?.contains(document.activeElement)) pairingButton.current?.focus();
-    setPairing(null);
-  }, []);
-  // Shows this tab's saved code only while the signed-in owner's server state names it; anything else erases it.
-  const syncPairing = useCallback(async () => {
-    const version = pairingVersion.current;
-    let active: ActivePairing = null;
-    try {
-      const response = await fetch("/api/pairing", { cache: "no-store" });
-      if (response.ok) active = ((await response.json()) as { active: ActivePairing }).active;
-    } catch {
-      active = null;
-    }
-    if (version !== pairingVersion.current) return;
-    const restored = await restorePairing(tabStorage(), active);
-    if (version === pairingVersion.current) setPairing(restored);
-  }, []);
+    hidePairing();
+  }, [hidePairing]);
+  // Shows this tab's saved code only while the signed-in owner's server state names it; anything else erases it. Returns
+  // undefined when an operation that started later took over.
+  const syncPairing = useCallback(
+    async (version?: number) => {
+      const restored = await checkPairing(
+        tabStorage(),
+        pairingVersion,
+        async () => {
+          const response = await fetch("/api/pairing", { cache: "no-store" });
+          return response.ok ? ((await response.json()) as { active: ActivePairing }).active : null;
+        },
+        version,
+      );
+      if (restored) setPairing(restored);
+      else if (restored === null) hidePairing();
+      return restored;
+    },
+    [hidePairing],
+  );
   // Every refresh re-checks the code against the account now signed in. A failed refresh cannot vouch for the code, so
-  // it is erased, unless a create or revoke started meanwhile and owns the newer state.
+  // it is erased, unless another pairing operation started meanwhile and owns the newer state.
   const refresh = useCallback(async () => {
-    const version = pairingVersion.current;
+    const version = ++pairingVersion.current;
     let current = false;
     try {
       const response = await fetch("/api/status", { cache: "no-store" });
@@ -106,7 +123,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     } finally {
       setRefreshing(false);
     }
-    if (current) await syncPairing();
+    if (current) await syncPairing(version);
     else if (version === pairingVersion.current) dropPairing();
   }, [syncPairing, dropPairing]);
   useEffect(() => {
@@ -128,6 +145,14 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     return () => window.clearTimeout(timer);
   }, [pairing, dropPairing]);
   useEffect(() => {
+    if (pairing) focusAfterHide.current = false;
+    if (pairing || busy || revoking || !focusAfterHide.current) return;
+    focusAfterHide.current = false;
+    // Removing the focused code drops focus to the body; keep any place the user moved to meanwhile.
+    if (document.activeElement && document.activeElement !== document.body) return;
+    pairingButton.current?.focus();
+  }, [pairing, busy, revoking]);
+  useEffect(() => {
     if (deleting || !focusAfterDelete.current) return;
     const outcome = focusAfterDelete.current;
     focusAfterDelete.current = null;
@@ -143,7 +168,8 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     setError("");
     setMessage("");
     setPairing(null);
-    const version = ++pairingVersion.current;
+    // Fences server checks that started earlier; the check after the response decides what is shown.
+    pairingVersion.current++;
     try {
       const response = await fetch("/api/pairing", {
         method: "POST",
@@ -152,14 +178,14 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       });
       if (!response.ok) throw new Error("연결 코드를 만들지 못했습니다. 잠시 후 다시 시도해 주세요.");
       const created = (await response.json()) as Pairing;
-      // A revoke or session failure after this create began has withdrawn or hidden its code.
-      if (version !== pairingVersion.current) return;
-      pairingVersion.current++;
+      // The response may belong to an account that is no longer signed in, so the code is shown only if the account
+      // signed in now reports it as active. A check that started meanwhile, such as a refresh, sees it in storage.
       savePairing(tabStorage(), created);
-      setPairing(created);
-      setMessage("새 연결 코드를 만들었습니다. 이전 코드는 더 이상 쓸 수 없습니다. Even Hub 앱에 입력해 주세요.");
+      const shown = await syncPairing();
+      if (shown?.code === created.code) setMessage(createdNotice);
+      else if (shown !== undefined)
+        setError("만든 코드를 지금 로그인한 계정에서 확인하지 못해 표시하지 않았습니다. 새 코드를 만들어 주세요.");
     } catch (cause) {
-      if (version !== pairingVersion.current) return;
       setError(cause instanceof Error ? cause.message : "연결 코드를 만들지 못했습니다.");
       // The server may or may not have replaced the code; show only what it still reports as active.
       await syncPairing();
@@ -230,9 +256,9 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   async function copy(value: string) {
     try {
       await navigator.clipboard.writeText(value);
-      setMessage("복사했습니다.");
+      setMessage(copied);
     } catch {
-      setMessage("자동 복사를 사용할 수 없습니다. 표시된 내용을 직접 선택해 복사해 주세요.");
+      setMessage(copyUnavailable);
     }
   }
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { hash } from "../lib/relay/core.ts";
-import { clearPairing, restorePairing, savePairing } from "../lib/pairing-session.ts";
+import { checkPairing, clearPairing, restorePairing, savePairing } from "../lib/pairing-session.ts";
 
 class MemoryStorage {
   items = new Map();
@@ -82,4 +82,70 @@ test("a code saved while an older server check runs is not erased by that check"
   };
   assert.equal(await restorePairing(storage, await active("d".repeat(64)), 1000), null);
   assert.deepEqual(JSON.parse(getItem("even-hub-pairing")), newer);
+});
+
+// Controlled GET /api/pairing responses, resolved in the order a test chooses.
+// checkPairing compares against the real clock, so these codes expire well after the test.
+const live = new Date(Date.now() + 600_000).toISOString();
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+test("a late create from the previous account is not shown after the new account's check cleared the code", async () => {
+  const storage = new MemoryStorage();
+  const latest = { current: 0 };
+  latest.current++; // Account A starts a create; its POST is held.
+  // Account B signs in and refreshes this tab; B has no active code.
+  const refreshVersion = ++latest.current;
+  assert.equal(await checkPairing(storage, latest, async () => null, refreshVersion), null);
+  // A's response arrives late. The dashboard saves it and checks it against the owner signed in now (B).
+  const created = { code, expiresAt: live };
+  savePairing(storage, created);
+  assert.equal(await checkPairing(storage, latest, async () => null), null);
+  assert.equal(storage.items.size, 0);
+});
+
+test("a refresh during a create cannot hide the created code with a server state read before the write", async () => {
+  const storage = new MemoryStorage();
+  const latest = { current: 0 };
+  const old = { code: "e".repeat(64), expiresAt: live };
+  savePairing(storage, old);
+  latest.current++; // Same owner starts a create.
+  const refreshVersion = ++latest.current;
+  const beforeWrite = deferred();
+  const refreshCheck = checkPairing(storage, latest, () => beforeWrite.promise, refreshVersion);
+  // The create response arrives and its own check starts after the refresh's check.
+  const created = { code, expiresAt: live };
+  savePairing(storage, created);
+  const createCheck = checkPairing(storage, latest, () => active(code, live));
+  beforeWrite.resolve(await active(old.code, live));
+  assert.equal(await refreshCheck, undefined);
+  assert.deepEqual(await createCheck, created);
+  assert.deepEqual(JSON.parse(storage.getItem("even-hub-pairing")), created);
+});
+
+test("a check started after a create's own check decides, and an older check cannot erase a newer code", async () => {
+  const storage = new MemoryStorage();
+  const latest = { current: 0 };
+  const created = { code, expiresAt: live };
+  savePairing(storage, created);
+  const createGet = deferred();
+  const createCheck = checkPairing(storage, latest, () => createGet.promise);
+  // The account changes and a refresh starts after the create's check: its result is the one that counts.
+  const refreshCheck = checkPairing(storage, latest, async () => null);
+  assert.equal(await refreshCheck, null);
+  createGet.resolve(await active(code, live));
+  assert.equal(await createCheck, undefined);
+  assert.equal(storage.items.size, 0);
+  // A failed GET from a check that started before a newer create does not erase the newer create's code.
+  const staleVersion = ++latest.current;
+  latest.current++; // A newer create starts and saves its code.
+  savePairing(storage, created);
+  assert.equal(
+    await checkPairing(storage, latest, async () => Promise.reject(new Error("401")), staleVersion),
+    undefined,
+  );
+  assert.deepEqual(JSON.parse(storage.getItem("even-hub-pairing")), created);
 });

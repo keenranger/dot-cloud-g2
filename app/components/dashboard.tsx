@@ -6,6 +6,7 @@ import {
   type RevealedPairing,
   checkPairing,
   confirmCreated,
+  fence,
   forgetLegacyPairing,
   revealPairing,
 } from "@/lib/pairing-session";
@@ -90,6 +91,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   const deletePrompt = useRef<HTMLParagraphElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
   const pairingButton = useRef<HTMLButtonElement>(null);
+  const withdrawButton = useRef<HTMLButtonElement>(null);
   const revealToggle = useRef<HTMLButtonElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   const copyButton = useRef<HTMLButtonElement>(null);
@@ -97,10 +99,16 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   // Bumped when a create, withdraw, revoke, refresh or server check starts, or a session failure hides the key, so a
   // server check or reveal that started earlier cannot overwrite the newer state.
   const pairingVersion = useRef(0);
+  // Bumped when the page is hidden or a pairing operation starts, so a reveal in flight is discarded, failure included,
+  // without fencing the server checks themselves.
+  const revealVersion = useRef(0);
+  // Only the latest refresh reports the status grid or ends the checking state.
+  const refreshVersion = useRef(0);
   // Set when an erase settles so focus moves only once React has re-enabled or replaced the controls.
   const focusAfterDelete = useRef<"success" | "failure" | null>(null);
-  // Set when the shown key disappears while focused, so focus moves once the remaining controls are enabled again.
-  const focusAfterHide = useRef(false);
+  // Set when the shown key disappears while focused or a reveal disables the pressed control, so focus moves once the
+  // remaining controls are enabled again.
+  const focusAfterKey = useRef(false);
   // Set when a confirmed create or withdraw settles: the new key's reveal control, the create control, or the warning.
   const focusAfterPairing = useRef<"toggle" | "create" | "prompt" | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
@@ -121,11 +129,17 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     if (revealedRef.current) {
       setMessage((current) => (keyNotices.includes(current) ? "" : current));
       const focused = document.activeElement;
-      if (focused && (focused === codeInput.current || focused === copyButton.current)) focusAfterHide.current = true;
+      if (focused && (focused === codeInput.current || focused === copyButton.current)) focusAfterKey.current = true;
     }
     revealedRef.current = null;
     setRevealedState(null);
   }, []);
+  // Hides the key and discards any reveal still in flight, so nothing it returns is shown or reported.
+  const concealKey = useCallback(() => {
+    revealVersion.current++;
+    setRevealing(false);
+    hideKey();
+  }, [hideKey]);
   // Records the server's state for the signed-in owner; a shown key that is no longer that state is hidden.
   const showActive = useCallback(
     (next: PairingState) => {
@@ -139,10 +153,10 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   const dropPairing = useCallback(() => {
     pairingVersion.current++;
     setMessage((current) => (current === createdNotice ? "" : current));
-    hideKey();
+    concealKey();
     setConfirming(null);
     setActive("unavailable");
-  }, [hideKey]);
+  }, [concealKey]);
   // Returns undefined when an operation that started later took over.
   const syncPairing = useCallback(
     async (version?: number) => {
@@ -152,27 +166,32 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     },
     [showActive],
   );
-  // Every refresh re-checks the key against the account now signed in. A failed refresh cannot vouch for the key, so
-  // it is hidden, unless another pairing operation started meanwhile and owns the newer state. It never issues a key.
+  // Every refresh hides the key before it asks the server and re-checks the key against the account now signed in; the
+  // key can be revealed again only after the check settles. A failed refresh cannot vouch for the key, unless another
+  // pairing operation started meanwhile and owns the newer state. It never issues or reveals a key.
   const refresh = useCallback(async () => {
     const version = ++pairingVersion.current;
+    const run = ++refreshVersion.current;
+    concealKey();
+    setRefreshing(true);
     let current = false;
     try {
       const response = await fetch("/api/status", { cache: "no-store" });
       if (response.status === 401) throw new Error(sessionExpired);
       if (!response.ok) throw new Error("연결 상태를 불러오지 못했습니다. 다시 확인해 주세요.");
-      setStatus((await response.json()) as Status);
-      setError("");
+      const next = (await response.json()) as Status;
+      if (run === refreshVersion.current) setStatus(next);
+      if (version === pairingVersion.current) setError("");
       current = true;
     } catch (cause) {
-      setStatus(null);
-      setError(cause instanceof Error ? cause.message : "연결 상태를 확인하지 못했습니다.");
-    } finally {
-      setRefreshing(false);
+      if (run === refreshVersion.current) setStatus(null);
+      if (version === pairingVersion.current)
+        setError(cause instanceof Error ? cause.message : "연결 상태를 확인하지 못했습니다.");
     }
     if (current) await syncPairing(version);
     else if (version === pairingVersion.current) dropPairing();
-  }, [syncPairing, dropPairing]);
+    if (run === refreshVersion.current) setRefreshing(false);
+  }, [concealKey, syncPairing, dropPairing]);
   useEffect(() => {
     // Read the browser URL only after mounting to avoid an SSR mismatch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -182,18 +201,32 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     void refresh();
   }, [refresh]);
   useEffect(() => {
-    // A page kept in the back/forward cache, for example after signing out, comes back with the key hidden.
-    window.addEventListener("pagehide", hideKey);
-    return () => window.removeEventListener("pagehide", hideKey);
-  }, [hideKey]);
-  useEffect(() => {
-    if (revealed) focusAfterHide.current = false;
-    if (revealed || busy || revoking || withdrawing || !focusAfterHide.current) return;
-    focusAfterHide.current = false;
-    // Removing the focused key drops focus to the body; keep any place the user moved to meanwhile.
-    if (document.activeElement && document.activeElement !== document.body) return;
-    [revealToggle.current, pairingButton.current, refreshButton.current].find((el) => el && !el.disabled)?.focus();
-  }, [revealed, active, busy, revoking, withdrawing]);
+    // A hidden page, or one kept in the back/forward cache after signing out, drops the key and any reveal in flight.
+    // Coming back, it re-checks the owner before the key can be revealed again; it never reveals by itself.
+    let concealed = false;
+    const conceal = () => {
+      concealed = true;
+      concealKey();
+      // Reveal stays disabled until the check on return; a refresh already running cannot end that.
+      refreshVersion.current++;
+      setRefreshing(true);
+    };
+    const restore = () => {
+      if (!concealed) return;
+      concealed = false;
+      void refresh();
+    };
+    const onVisibility = () => (document.visibilityState === "hidden" ? conceal() : restore());
+    const onPageShow = (event: PageTransitionEvent) => event.persisted && restore();
+    window.addEventListener("pagehide", conceal);
+    window.addEventListener("pageshow", onPageShow);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", conceal);
+      window.removeEventListener("pageshow", onPageShow);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [concealKey, refresh]);
   useEffect(() => {
     if (busy || withdrawing || !focusAfterPairing.current) return;
     const target = focusAfterPairing.current;
@@ -216,6 +249,15 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     // A failed refresh hides the deletion group, so fall back to the always-present refresh control.
     ((outcome === "failure" ? deletePrompt.current : null) ?? deleteTrigger.current ?? refreshButton.current)?.focus();
   }, [deleting]);
+  // Runs after the create/withdraw focus above, which takes precedence for the same commit.
+  useEffect(() => {
+    if (revealing || refreshing || busy || revoking || withdrawing || !focusAfterKey.current) return;
+    focusAfterKey.current = false;
+    // Removing the focused key or disabling the pressed reveal control drops focus to the body; keep any place the
+    // user moved to meanwhile.
+    if (document.activeElement && document.activeElement !== document.body) return;
+    [revealToggle.current, pairingButton.current, refreshButton.current].find((el) => el && !el.disabled)?.focus();
+  }, [revealed, revealing, refreshing, active, busy, revoking, withdrawing]);
 
   function startConfirm(kind: "rotate" | "withdraw") {
     setConfirming(kind);
@@ -223,16 +265,21 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     requestAnimationFrame(() => pairingPrompt.current?.focus());
   }
   function cancelConfirm() {
+    const trigger = confirming === "withdraw" ? withdrawButton : pairingButton;
     setConfirming(null);
-    requestAnimationFrame(() => pairingButton.current?.focus());
+    // Back to the control that opened the warning; removing the pressed cancel drops focus to the body only.
+    requestAnimationFrame(() => {
+      if (document.activeElement && document.activeElement !== document.body) return;
+      [trigger.current, pairingButton.current, refreshButton.current].find((el) => el && !el.disabled)?.focus();
+    });
   }
   async function createPairing() {
     setBusy(true);
     setError("");
     setMessage("");
-    hideKey();
+    concealKey();
     // Fences server checks and reveals that started earlier; the check after the response decides what is shown.
-    pairingVersion.current++;
+    const version = ++pairingVersion.current;
     try {
       const response = await fetch("/api/pairing", {
         method: "POST",
@@ -255,6 +302,8 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         focusAfterPairing.current = "create";
       }
     } catch (cause) {
+      // A refresh or another operation started meanwhile owns the newer state and its errors.
+      if (version !== pairingVersion.current) return;
       setError(cause instanceof Error ? cause.message : pairingFailure(0, "create"));
       focusAfterPairing.current = "prompt";
       if (cause instanceof SessionExpired) dropPairing();
@@ -268,17 +317,19 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     setWithdrawing(true);
     setError("");
     setMessage("");
-    hideKey();
-    pairingVersion.current++;
+    concealKey();
+    const version = ++pairingVersion.current;
     try {
       const response = await fetch("/api/pairing", { method: "DELETE" });
       if (response.status === 401) throw new SessionExpired(sessionExpired);
       if (!response.ok) throw new Error(pairingFailure(response.status, "withdraw"));
+      if (version !== pairingVersion.current) return;
       setMessage(withdrawnNotice);
       setConfirming(null);
       focusAfterPairing.current = "create";
       await syncPairing();
     } catch (cause) {
+      if (version !== pairingVersion.current) return;
       setError(cause instanceof Error ? cause.message : pairingFailure(0, "withdraw"));
       focusAfterPairing.current = "prompt";
       if (cause instanceof SessionExpired) dropPairing();
@@ -293,37 +344,46 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       return;
     }
     if (!active || active === "unavailable" || !active.revealable) return;
+    // Every write below is skipped once a pairing operation starts or the page is hidden; that newer context owns the
+    // key, the error and the reveal control's state.
+    const current = fence(pairingVersion, revealVersion);
+    // The pressed control is disabled while the reveal runs, which drops focus to the body.
+    if (document.activeElement === revealToggle.current) focusAfterKey.current = true;
     setRevealing(true);
     setError("");
+    let result: RevealedPairing | null | undefined;
     try {
-      const result = await revealPairing(pairingVersion, active, async () => {
+      result = await revealPairing(current, active, async () => {
         const response = await fetch("/api/pairing/reveal", { method: "POST", cache: "no-store" });
         if (response.status === 401) throw new SessionExpired(sessionExpired);
         if (!response.ok) throw new Error(pairingFailure(response.status, "reveal"));
         return (await response.json()) as RevealedPairing;
       });
-      if (result) {
-        revealedRef.current = result;
-        setRevealedState(result);
-        setMessage("연결 키를 표시했습니다.");
-      } else if (result === null) {
-        setError("이 화면이 알고 있는 키와 서버의 현재 키가 달라 표시하지 않았습니다. 최신 상태를 다시 확인했습니다.");
-        await syncPairing();
-      }
     } catch (cause) {
+      if (!current()) return;
+      setRevealing(false);
       setError(cause instanceof Error ? cause.message : pairingFailure(0, "reveal"));
       if (cause instanceof SessionExpired) dropPairing();
-    } finally {
-      setRevealing(false);
+      return;
+    }
+    if (result === undefined || !current()) return;
+    setRevealing(false);
+    if (result) {
+      revealedRef.current = result;
+      setRevealedState(result);
+      setMessage("연결 키를 표시했습니다.");
+    } else {
+      setError("이 화면이 알고 있는 키와 서버의 현재 키가 달라 표시하지 않았습니다. 최신 상태를 다시 확인했습니다.");
+      await syncPairing();
     }
   }
   async function revokeAll() {
     setRevoking(true);
     setError("");
     setConfirming(null);
-    hideKey();
+    concealKey();
     // Fences any server check already running; creating is disabled until this settles.
-    pairingVersion.current++;
+    const version = ++pairingVersion.current;
     try {
       const response = await fetch("/api/devices/revoke", {
         method: "POST",
@@ -331,10 +391,12 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         body: JSON.stringify({ all: true }),
       });
       if (!response.ok) throw new Error("기기 연결을 해제하지 못했습니다.");
+      if (version !== pairingVersion.current) return;
       setMessage("내 모든 기기 연결을 해제하고 연결 키도 폐기했습니다. 다시 사용하려면 새 연결 키로 페어링해 주세요.");
       showActive(null);
       await refresh();
     } catch (cause) {
+      if (version !== pairingVersion.current) return;
       setError(cause instanceof Error ? cause.message : "기기 연결을 해제하지 못했습니다.");
       // The server may or may not have withdrawn the key; show only what it still reports.
       await syncPairing();
@@ -402,10 +464,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
           ref={refreshButton}
           className="button secondary small"
           type="button"
-          onClick={() => {
-            setRefreshing(true);
-            void refresh();
-          }}
+          onClick={() => void refresh()}
           disabled={refreshing}
         >
           {refreshing ? "확인 중…" : "상태 새로고침"}
@@ -472,7 +531,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
                   type="button"
                   aria-controls="pairing-code"
                   aria-expanded={!!revealed}
-                  disabled={revealing || busy || withdrawing || revoking}
+                  disabled={revealing || refreshing || busy || withdrawing || revoking}
                   onClick={() => void toggleKey()}
                 >
                   {revealing ? "확인 중…" : revealed ? "키 숨기기" : "키 확인"}
@@ -516,6 +575,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
             </button>
             {active && active !== "unavailable" && (
               <button
+                ref={withdrawButton}
                 type="button"
                 className="button secondary small"
                 disabled={busy || revoking || withdrawing}

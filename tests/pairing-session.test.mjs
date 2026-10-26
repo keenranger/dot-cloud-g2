@@ -5,6 +5,7 @@ import { hash } from "../lib/relay/core.ts";
 import {
   checkPairing,
   confirmCreated,
+  fence,
   fingerprint,
   forgetLegacyPairing,
   revealPairing,
@@ -85,28 +86,55 @@ test("a late create from the previous account cannot overwrite a newer refresh",
 
 test("a reveal is shown only for the key the page names, and any newer operation discards it", async () => {
   const latest = { current: 3 };
-  assert.deepEqual(await revealPairing(latest, await active(), () => reveal()), await reveal());
+  assert.deepEqual(await revealPairing(fence(latest), await active(), () => reveal()), await reveal());
   assert.equal(latest.current, 3, "a reveal does not fence other operations");
   // The key was rotated elsewhere or the account changed: the server returns a key the page does not describe.
-  assert.equal(await revealPairing(latest, await active(), () => reveal(other)), null);
+  assert.equal(await revealPairing(fence(latest), await active(), () => reveal(other)), null);
   // A response whose fingerprint does not hash from its code is not shown.
   assert.equal(
-    await revealPairing(latest, await active(), async () => ({ code: other, fingerprint: await hash(code) })),
+    await revealPairing(fence(latest), await active(), async () => ({ code: other, fingerprint: await hash(code) })),
     null,
   );
-  for (const shown of [null, "unavailable"]) assert.equal(await revealPairing(latest, shown, () => reveal()), null);
+  for (const shown of [null, "unavailable"])
+    assert.equal(await revealPairing(fence(latest), shown, () => reveal()), null);
   // Rotate, withdraw, revoke-all, refresh or a session failure starts while the reveal is in flight.
   const held = deferred();
-  const pending = revealPairing(latest, await active(), () => held.promise);
+  const pending = revealPairing(fence(latest), await active(), () => held.promise);
   latest.current++;
   held.resolve(await reveal());
   assert.equal(await pending, undefined);
 });
 
+test("hiding the page discards a reveal in flight without fencing the page's metadata checks", async () => {
+  const latest = { current: 0 };
+  const reveals = { current: 0 };
+  const held = deferred();
+  const pending = revealPairing(fence(latest, reveals), await active(), () => held.promise);
+  const check = checkPairing(latest, () => active());
+  reveals.current++; // pagehide or visibility hidden
+  held.resolve(await reveal());
+  assert.equal(await pending, undefined);
+  assert.deepEqual(await check, await active(), "a server check that started earlier still settles");
+});
+
+test("a reveal that fails after a newer operation started reports nothing", async () => {
+  // An old reveal's 401 or 503 arrives after a rotate, withdraw or refresh: it must not hide or explain the newer key.
+  for (const failure of ["401", "503"]) {
+    const latest = { current: 0 };
+    const held = deferred();
+    const pending = revealPairing(fence(latest), await active(), () =>
+      held.promise.then(() => Promise.reject(new Error(failure))),
+    );
+    latest.current++;
+    held.resolve();
+    assert.equal(await pending, undefined);
+  }
+});
+
 test("reveal failures propagate so the dashboard can explain them and hide the key", async () => {
   const latest = { current: 0 };
   await assert.rejects(
-    revealPairing(latest, await active(), async () => Promise.reject(new Error("503"))),
+    revealPairing(fence(latest), await active(), async () => Promise.reject(new Error("503"))),
     /503/,
   );
 });

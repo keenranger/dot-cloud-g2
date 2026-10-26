@@ -174,7 +174,7 @@ test("R5 retention and deletion preserve device, subscription, pairing and rate 
   try {
     const device = await h.device("alice");
     await h.subscribe("alice");
-    await h.relay.pairing("alice");
+    const { code } = await h.relay.pairing("alice");
     await h.relay.submit(device, { id: uuid(), text: "질문" });
     await h.relay.deleteConversations("alice");
     h.clock.now = T0 + 31 * DAY;
@@ -183,6 +183,10 @@ test("R5 retention and deletion preserve device, subscription, pairing and rate 
     assert.equal(h.raw("alice", "device").length, 1);
     assert.equal(h.raw("alice", "subscription").length, 1);
     assert.equal(h.raw("alice", "pairing").length, 1);
+    // The connection key itself survives: the owner reveals the same key and it still pairs another device.
+    assert.equal((await h.relay.revealPairing("alice")).code, code);
+    assert.equal((await h.relay.authenticate((await h.relay.pair(code)).token)).owner, "alice");
+    assert.equal(h.raw("alice", "device").length, 2);
   } finally {
     h.db.sqlite.close();
   }

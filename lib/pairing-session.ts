@@ -56,23 +56,34 @@ export async function confirmCreated(
   if (active === undefined) return undefined;
   return { active, confirmed: !!active && active !== "unavailable" && active.fingerprint === expected };
 }
-// A reveal does not start a new operation; any operation that starts while it runs discards its result. The key is
-// shown only if it is the key this page currently names for the owner, so a rotation elsewhere or an account change
-// returns null instead of a key the page does not describe.
+// Takes the counters' current values; the returned check is true while none of them has moved since.
+export function fence(...counters: { current: number }[]) {
+  const taken = counters.map((counter) => counter.current);
+  return () => counters.every((counter, i) => counter.current === taken[i]);
+}
+// A reveal does not start a new operation; `current` turns false when one starts or the page is hidden, and then the
+// reveal's result is discarded, failure included, so a late 401 cannot hide or explain a newer key. The key is shown
+// only if it is the key this page currently names for the owner, so a rotation elsewhere or an account change returns
+// null instead of a key the page does not describe.
 export async function revealPairing(
-  latest: { current: number },
+  current: () => boolean,
   shown: ActivePairing | "unavailable",
   getReveal: () => Promise<RevealedPairing>,
 ) {
-  const version = latest.current;
-  const revealed = await getReveal();
-  if (version !== latest.current) return undefined;
+  let revealed: RevealedPairing;
+  try {
+    revealed = await getReveal();
+  } catch (cause) {
+    if (!current()) return undefined;
+    throw cause;
+  }
+  if (!current()) return undefined;
   if (
     !shown ||
     shown === "unavailable" ||
     revealed.fingerprint !== shown.fingerprint ||
     (await fingerprint(revealed.code)) !== shown.fingerprint
   )
-    return null;
-  return version === latest.current ? revealed : undefined;
+    return current() ? null : undefined;
+  return current() ? revealed : undefined;
 }

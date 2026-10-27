@@ -597,7 +597,10 @@ test("MCP acknowledgement and final reach the device poll, which never waits for
   const second = await (await messages.GET(deviceRequest(alice.token, "/api/device/messages"))).json();
   assert.deepEqual(
     second.messages.map((m) => [m.message_id, m.stage, m.text]),
-    [[`reply_${id}`, "final", "찾은 자료입니다."]],
+    [
+      [`ack_${id}`, "ack", "자료를 찾아볼게요."],
+      [`reply_${id}`, "final", "찾은 자료입니다."],
+    ],
   );
   release.resolve();
   await Promise.all(globalThis.__relayBackground);

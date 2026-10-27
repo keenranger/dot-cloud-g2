@@ -28,30 +28,40 @@ export class MessageHistory {
     return this.items[this.index];
   }
   /**
-   * A final answer supersedes its utterance's acknowledgement, whether it arrives in the same batch or later: a kept
-   * acknowledgement leaves and the final joins the end, and an acknowledgement is never added after its final. A
-   * reader on the acknowledgement moves to its final; a reader elsewhere keeps their place.
+   * An acknowledgement and its final answer are two entries that both stay readable: neither replaces the other. An
+   * acknowledgement that arrives after its final (a capped or out-of-order batch) is placed just before that final, so
+   * an utterance always reads acknowledgement then final. A reader at the tail follows new entries; a reader elsewhere
+   * keeps their place.
    */
   receive(batch: readonly Reply[]): boolean {
     const old = this.selected;
     const following = !old || this.index === this.items.length - 1;
-    const answered = new Set([...this.items, ...batch].map(answers).filter(Boolean));
-    const superseded = (item: Reply) => item.stage === "ack" && answered.has(item.utterance_id);
     const known = new Set(this.items.map((item) => item.message_id));
     const additions = batch.filter((item) => {
-      if (known.has(item.message_id) || this.expired(item) || superseded(item)) return false;
+      if (known.has(item.message_id) || this.expired(item)) return false;
       known.add(item.message_id);
       return true;
     });
     if (!additions.length) return false;
-    const replaced = old && superseded(old) ? additions.find((item) => answers(item) === old.utterance_id) : undefined;
-    this.items = [...this.items.filter((item) => !superseded(item)), ...additions].slice(-this.capacity);
+    const items = [...this.items];
+    for (const item of additions) {
+      const final = item.stage === "ack" ? items.findIndex((kept) => answers(kept) === item.utterance_id) : -1;
+      if (final >= 0) items.splice(final, 0, item);
+      else items.push(item);
+    }
+    this.items = items.slice(-this.capacity);
     if (following) this.selectedId = this.items.at(-1)?.message_id;
-    else if (replaced) this.selectedId = replaced.message_id;
     else if (!this.items.some((item) => item.message_id === this.selectedId))
       this.selectedId = this.items[0]?.message_id;
     this.revision++;
     return this.selected?.message_id !== old?.message_id;
+  }
+  /** Whether the other stage of this reply's utterance is kept here: an acknowledgement's final, or a final's acknowledgement. */
+  paired(reply: Reply): boolean {
+    if (!reply.utterance_id) return false;
+    return reply.stage === "ack"
+      ? this.items.some((item) => answers(item) === reply.utterance_id)
+      : this.items.some((item) => item.stage === "ack" && item.utterance_id === reply.utterance_id);
   }
   move(delta: number): boolean {
     const next = Math.max(0, Math.min(this.items.length - 1, this.index + delta));

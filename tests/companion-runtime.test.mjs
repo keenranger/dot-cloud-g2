@@ -2032,7 +2032,7 @@ const final = (utterance, text, createdAt = "2026-10-26T00:00:02Z") => ({
   createdAt,
 });
 
-test("the capture's own acknowledgement and final reach G2 while its POST is pending, and the final replaces it", async () => {
+test("the capture's own acknowledgement and final reach G2 while its POST is pending, and both stay readable", async () => {
   let settle;
   const server = { revision: 1, messages: [], post: () => new Promise((resolve) => (settle = resolve)) };
   const h = await boot({ storage: ready, fetch: relay(server) });
@@ -2046,31 +2046,48 @@ test("the capture's own acknowledgement and final reach G2 while its POST is pen
     server.messages = [ack(id, "내일 일정을 확인해 볼게요.")];
     await h.fire(2500);
     assert.equal(bodies(h).at(-1), "내일 일정을 확인해 볼게요.", "the capture's acknowledgement takes G2");
-    assert.match(headers(h).at(-1), /^답변 1\/1 · 최종 답변 대기/, "G2 says the final answer is still coming");
-    assert.match(h.get("status").textContent, /최종 답변 대기/);
+    assert.match(headers(h).at(-1), /^답변 1\/1 · 중간 답변 · 최종 답변 대기/, "G2 names the intermediate stage");
+    assert.match(h.get("status").textContent, /중간 답변 수신 · 최종 답변 대기/);
     assert.equal(h.get("reply").textContent, "내일 일정을 확인해 볼게요.");
-    // The relay drops a superseded acknowledgement, but a poll carrying both still shows only the final.
+    assert.equal(h.get("message-position").textContent, "1 / 1개 메시지 · 중간 답변 · 최종 답변 대기");
     server.messages = [ack(id, "내일 일정을 확인해 볼게요."), final(id, "내일 오후 2시에 회의가 있어요.")];
     await h.fire(2500);
-    assert.equal(bodies(h).at(-1), "내일 오후 2시에 회의가 있어요.");
-    assert.match(headers(h).at(-1), /^답변 1\/1(?! · 최종)/, "one entry per utterance, without the waiting note");
+    assert.equal(bodies(h).at(-1), "내일 오후 2시에 회의가 있어요.", "the reader at the tail follows the final");
+    assert.match(headers(h).at(-1), /^답변 2\/2 · 최종 답변/, "the final is its own entry after the acknowledgement");
     assert.equal(h.get("reply").textContent, "내일 오후 2시에 회의가 있어요.");
+    assert.equal(h.get("message-position").textContent, "2 / 2개 메시지 · 최종 답변");
+    assert.match(h.get("status").textContent, /최종 답변 수신.*중간 답변도 이전 메시지에 남아 있습니다/);
     const writes = bodies(h).length;
     settle(Response.json({ status: "accepted" }));
     await h.flush();
     for (let i = 0; i < 2; i++) await h.fire(2500);
-    assert.deepEqual(bodies(h).slice(writes), [], "the late submission response and later polls leave the final");
+    assert.deepEqual(bodies(h).slice(writes), [], "the late submission response and duplicate polls leave the final");
     assert.ok(
       !bodies(h).some((b) => b.includes("서버 저장")),
       "no waiting notice ever replaces a reply to this utterance",
     );
     assert.equal(server.posts.length, 1);
+    // The existing G2 navigation reads the acknowledgement again, unchanged, and the phone buttons do too.
+    await h.event(EVENT.SCROLL_TOP, "textEvent");
+    assert.equal(bodies(h).at(-1), "내일 일정을 확인해 볼게요.");
+    assert.match(
+      headers(h).at(-1),
+      /^답변 1\/2 · 중간 답변(?! · 최종 답변 대기)/,
+      "its final is kept, so nothing is pending",
+    );
+    assert.equal(h.get("message-position").textContent, "1 / 2개 메시지 · 중간 답변");
+    h.get("next-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "내일 오후 2시에 회의가 있어요.");
+    h.get("prev-message").onclick();
+    await h.flush();
+    assert.equal(h.get("reply").textContent, "내일 일정을 확인해 볼게요.");
   } finally {
     h.restore();
   }
 });
 
-test("an earlier utterance's acknowledgement and final wait behind live running text, and only the final is shown", async () => {
+test("an earlier utterance's acknowledgement and final wait behind live running text, and both stay in history", async () => {
   const server = { revision: 1, messages: [] };
   const h = await boot({ storage: ready, fetch: relay(server) });
   try {
@@ -2089,16 +2106,16 @@ test("an earlier utterance's acknowledgement and final wait behind live running 
     await release(h, second, "그리고 모레는");
     assert.equal(server.posts.length, 2);
     assert.equal(bodies(h).at(-1), "내일은 비 예보가 있어요.", "the deferred final comes back after submission");
-    assert.match(headers(h).at(-1), /^답변 1\/1(?! · 최종)/);
-    // The acknowledgement was shown before the final, and never again after it.
-    const finalAt = bodies(h).indexOf("내일은 비 예보가 있어요.");
-    assert.ok(!bodies(h).slice(finalAt).includes("찾아볼게요."));
+    assert.match(headers(h).at(-1), /^답변 2\/2 · 최종 답변/);
+    h.get("prev-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "찾아볼게요.", "the acknowledgement is still readable before its final");
   } finally {
     h.restore();
   }
 });
 
-test("a reader on an older reply keeps it while another utterance's acknowledgement gives way to its final", async () => {
+test("a reader on an older reply keeps it while another utterance's acknowledgement is joined by its final", async () => {
   const server = {
     revision: 1,
     messages: [msg2("a", "첫 답변", day(20)), msg2("b", "둘째 답변", day(21))],
@@ -2113,19 +2130,86 @@ test("a reader on an older reply keeps it while another utterance's acknowledgem
     const writes = bodies(h).length;
     server.messages = [...server.messages, ack("u", "확인할게요.", day(22))];
     await h.fire(2500);
-    assert.match(headers(h).at(-1), /^답변 1\/3(?! · 최종)/);
+    assert.match(
+      headers(h).at(-1),
+      /^답변 1\/3(?! · (중간|최종) 답변)/,
+      "a reply without an acknowledgement has no stage label",
+    );
     server.messages = [...server.messages, final("u", "확인했어요.", day(23))];
     await h.fire(2500);
     assert.match(
       headers(h).at(-1),
-      /^답변 1\/3(?! · 최종)/,
-      "the final takes the acknowledgement's place in the count",
+      /^답변 1\/4(?! · (중간|최종) 답변)/,
+      "the final is counted beside its acknowledgement",
     );
     assert.deepEqual(bodies(h).slice(writes), [], "the body being read is never replaced");
     h.get("next-message").onclick();
     h.get("next-message").onclick();
     await h.flush();
+    assert.equal(bodies(h).at(-1), "확인할게요.");
+    assert.match(headers(h).at(-1), /^답변 3\/4 · 중간 답변(?! · 최종 답변 대기)/);
+    h.get("next-message").onclick();
+    await h.flush();
     assert.equal(bodies(h).at(-1), "확인했어요.");
+    assert.match(headers(h).at(-1), /^답변 4\/4 · 최종 답변/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a reader on an acknowledgement behind newer messages keeps its body when the final arrives; only the label changes", async () => {
+  const server = { revision: 1, messages: [ack("u", "찾아볼게요.", day(22)), msg2("b", "다른 알림", day(23))] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    await h.fire(2500);
+    h.get("prev-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "찾아볼게요.");
+    assert.match(headers(h).at(-1), /^답변 1\/2 · 중간 답변 · 최종 답변 대기/);
+    const writes = bodies(h).length;
+    server.messages = [...server.messages, final("u", "찾았어요.", day(24))];
+    await h.fire(2500);
+    assert.deepEqual(bodies(h).slice(writes), [], "the acknowledgement being read stays on G2");
+    assert.match(headers(h).at(-1), /^답변 1\/3 · 중간 답변(?! · 최종 답변 대기)/);
+    assert.equal(h.get("message-position").textContent, "1 / 3개 메시지 · 중간 답변");
+    assert.equal(h.get("reply").textContent, "찾아볼게요.");
+  } finally {
+    h.restore();
+  }
+});
+
+test("an acknowledgement seen after its final reads before it, and a relay that stops sending it keeps it", async () => {
+  // A capped or reordered batch can carry the final first; the acknowledgement then joins just before it.
+  const server = { revision: 1, messages: [final("u", "답입니다.", day(22))] };
+  const h = await boot({ storage: ready, fetch: relay(server) });
+  try {
+    await h.fire(2500);
+    assert.equal(bodies(h).at(-1), "답입니다.");
+    assert.match(
+      headers(h).at(-1),
+      /^답변 1\/1(?! · (중간|최종) 답변)/,
+      "no acknowledgement is kept, so no stage label",
+    );
+    const writes = bodies(h).length;
+    server.messages = [final("u", "답입니다.", day(22)), ack("u", "볼게요.", day(21))];
+    for (let i = 0; i < 2; i++) await h.fire(2500);
+    assert.deepEqual(bodies(h).slice(writes), [], "the reader stays on the final");
+    assert.match(headers(h).at(-1), /^답변 2\/2 · 최종 답변/);
+    h.get("prev-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "볼게요.");
+    // The 0.6.0 relay leaves an answered acknowledgement out of its polls; a kept one is not dropped for that.
+    server.messages = [ack("v", "확인할게요.", day(23))];
+    await h.fire(2500);
+    server.messages = [final("v", "확인했어요.", day(24))];
+    await h.fire(2500);
+    assert.equal(h.get("message-position").textContent, "1 / 4개 메시지 · 중간 답변");
+    for (let i = 0; i < 3; i++) h.get("next-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "확인했어요.");
+    h.get("prev-message").onclick();
+    await h.flush();
+    assert.equal(bodies(h).at(-1), "확인할게요.");
   } finally {
     h.restore();
   }

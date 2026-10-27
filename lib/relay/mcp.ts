@@ -7,7 +7,7 @@ export const tools = [
   {
     name: "acknowledge_g2_utterance",
     description:
-      "Optional first stage of a reply to an owner's pending Even G2 utterance. Before work that takes more than a few seconds (searching, tools, long reasoning), call this once with a short reply you wrote for this utterance, such as what you are about to do, then call reply_to_g2 with the final answer. Never send a generic receipt such as 'received' or 'working on it'. It does not complete the utterance; only reply_to_g2 does. Retrying with identical text is safe; different text is rejected. After the final reply is stored, an acknowledgement is not stored or shown (superseded_by_final). Receipt confirms durable storage, not physical display. Deleted or expired utterances are unknown.",
+      "Optional first stage of a reply to an owner's pending Even G2 utterance. Before work that takes more than a few seconds (searching, tools, long reasoning), call this once with a short reply you wrote for this utterance, such as what you are about to do, then call reply_to_g2 with the final answer. Never send a generic receipt such as 'received' or 'working on it'. It does not complete the utterance; only reply_to_g2 does. Retrying with identical text is safe; different text is rejected. An acknowledgement stays readable on G2 beside its final reply. An acknowledgement first sent after the final reply is stored is not stored or shown (superseded_by_final). Receipt confirms durable storage, not physical display. Deleted or expired utterances are unknown.",
     inputSchema: {
       type: "object",
       properties: { utterance_id: uuid, text: { ...textProperty, maxLength: 500 } },
@@ -18,7 +18,7 @@ export const tools = [
   {
     name: "reply_to_g2",
     description:
-      "Final stage: reply to an owner's pending Even G2 utterance using utterance_id, completing it. If you acknowledged it with acknowledge_g2_utterance, the final reply replaces that acknowledgement on G2. Retrying with identical text is safe; a different second reply is rejected. Receipt confirms durable storage, not physical display. Deleted or expired utterances are unknown.",
+      "Final stage: reply to an owner's pending Even G2 utterance using utterance_id, completing it. If you acknowledged it with acknowledge_g2_utterance, the final reply is shown after that acknowledgement on G2, and both stay readable. Retrying with identical text is safe; a different second reply is rejected. Receipt confirms durable storage, not physical display. Deleted or expired utterances are unknown.",
     inputSchema: {
       type: "object",
       properties: { utterance_id: uuid, text: textProperty },

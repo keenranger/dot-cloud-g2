@@ -833,7 +833,7 @@ test("status reports phone-direct transcription without claiming phone key readi
   }
 });
 
-test("an acknowledgement is shown until its final reply, which completes the utterance and supersedes it", async () => {
+test("an acknowledgement stays readable before its final reply, which completes the utterance", async () => {
   let now = Date.parse("2026-10-26T00:00:00.000Z");
   const relay = new TestRelay(new MemoryStore(), undefined, () => now);
   const alice = await device(relay);
@@ -861,15 +861,19 @@ test("an acknowledgement is shown until its final reply, which completes the utt
   assert.equal(final.message_id, `reply_${id}`);
   assert.equal(final.stage, "final");
   assert.equal((await relay.pending("alice")).length, 0);
-  // Both rows are stored, but a poll that sees the final never carries the acknowledgement again.
+  // Both rows are stored and every later poll carries both, acknowledgement first, with their own text.
   messages = await relay.messages(alice);
   assert.deepEqual(
-    messages.map((m) => [m.message_id, m.stage, m.seq]),
-    [[`reply_${id}`, "final", 2]],
+    messages.map((m) => [m.message_id, m.stage, m.seq, m.text]),
+    [
+      [`ack_${id}`, "ack", 1, "내일 서울 날씨를 찾아볼게요."],
+      [`reply_${id}`, "final", 2, "내일 서울은 맑고 18도예요."],
+    ],
   );
+  assert.deepEqual(await relay.messages(alice), messages, "a repeated poll returns the same two entries");
 });
 
-test("acknowledgements are idempotent, reject conflicts, and are never stored or shown after the final", async () => {
+test("acknowledgements are idempotent, reject conflicts, and are never first stored after the final", async () => {
   const relay = new TestRelay(new MemoryStore());
   const alice = await device(relay);
   const id = randomUUID();
@@ -884,14 +888,22 @@ test("acknowledgements are idempotent, reject conflicts, and are never stored or
   await assert.rejects(relay.acknowledge("alice", { utterance_id: id, text: "x".repeat(501) }), /too_big/);
   assert.equal((await relay.messages(alice)).length, 1);
   await relay.reply("alice", { utterance_id: id, text: "요약입니다." });
-  // The same acknowledgement retried late reports its earlier storage without showing again.
+  // The same acknowledgement retried late reports its earlier storage without adding a second entry.
   assert.equal(
     (await relay.acknowledge("alice", { utterance_id: id, text: "회의록을 읽고 요약할게요." })).stored_for_g2,
     true,
   );
+  await assert.rejects(
+    relay.acknowledge("alice", { utterance_id: id, text: "바뀐 응답" }),
+    (e) => e.status === 409,
+    "the kept acknowledgement text is never replaced after the final",
+  );
   assert.deepEqual(
-    (await relay.messages(alice)).map((m) => m.stage),
-    ["final"],
+    (await relay.messages(alice)).map((m) => [m.stage, m.text]),
+    [
+      ["ack", "회의록을 읽고 요약할게요."],
+      ["final", "요약입니다."],
+    ],
   );
 
   // A first acknowledgement after the final is reported as superseded and stores nothing.

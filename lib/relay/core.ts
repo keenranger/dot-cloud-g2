@@ -747,14 +747,11 @@ export class Relay {
     const retry = this.drain(device).catch(() => console.warn("event_retry_failed"));
     if (background) background(retry);
     else await retry;
-    const messages = snapshot.messages
-      .map((r) => JSON.parse(r.value))
-      .filter((r) => !r.deviceId || r.deviceId === device.id);
-    // A final answer supersedes its acknowledgement, which is then never sent again.
-    const answered = new Set(messages.filter((r) => r.utterance_id && r.stage !== "ack").map((r) => r.utterance_id));
     return {
-      messages: messages
-        .filter((r) => !(r.stage === "ack" && answered.has(r.utterance_id)))
+      // An acknowledgement stays beside its final answer, so the device can read both; seq orders them on a tie.
+      messages: snapshot.messages
+        .map((r) => JSON.parse(r.value))
+        .filter((r) => !r.deviceId || r.deviceId === device.id)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.seq ?? 0) - (b.seq ?? 0))
         .slice(-100),
       // Increases once per owner deletion; companions drop cached history when it rises.

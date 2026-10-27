@@ -422,3 +422,46 @@ test("D1 acknowledgement insert requires the owner's live, unanswered utterance"
     db.sqlite.close();
   }
 });
+
+test("D1 polls keep an acknowledgement beside its final in stage order until deletion or expiry takes each", async () => {
+  const db = database();
+  try {
+    let now = Date.parse("2026-10-26T00:00:00.000Z");
+    const relay = new TestRelay(new D1Store(db), undefined, () => now);
+    const pair = async (owner) => relay.authenticate((await relay.pair((await relay.pairing(owner)).code)).token);
+    const alice = await pair("alice");
+    const bob = await pair("bob");
+    const id = crypto.randomUUID();
+    await relay.submit(alice, { id, text: "자료 찾아줘" });
+    // Both stages share one timestamp, so only the sequence number orders them.
+    await relay.acknowledge("alice", { utterance_id: id, text: "자료를 찾아볼게요." });
+    await relay.reply("alice", { utterance_id: id, text: "찾은 자료입니다." });
+    const read = async (device) =>
+      (await relay.poll(device)).messages.map((m) => [m.message_id, m.stage, m.seq, m.text]);
+    const both = [
+      [`ack_${id}`, "ack", 1, "자료를 찾아볼게요."],
+      [`reply_${id}`, "final", 2, "찾은 자료입니다."],
+    ];
+    assert.deepEqual(await read(alice), both);
+    assert.deepEqual(await read(alice), both, "a repeated poll carries the same two entries");
+    assert.deepEqual(await read(bob), []);
+    // The acknowledgement is older than its final, so retention takes it first.
+    const later = crypto.randomUUID();
+    now += 1000;
+    await relay.submit(alice, { id: later, text: "또 찾아줘" });
+    await relay.acknowledge("alice", { utterance_id: later, text: "다시 볼게요." });
+    now += 1000;
+    await relay.reply("alice", { utterance_id: later, text: "다시 찾았어요." });
+    now = Date.parse("2026-10-26T00:00:01.000Z") + 30 * 86_400_000;
+    assert.deepEqual(
+      (await relay.poll(alice)).messages.map((m) => m.message_id),
+      [`reply_${later}`],
+    );
+    now -= 1000;
+    const erased = await relay.deleteConversations("alice");
+    assert.equal(erased.messages, 4);
+    assert.deepEqual(await read(alice), [], "an owner deletion takes both stages");
+  } finally {
+    db.sqlite.close();
+  }
+});

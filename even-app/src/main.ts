@@ -346,6 +346,8 @@ const ERASED =
   "대화 기록이 삭제되어 이 기기에 보이던 답변을 모두 지웠습니다. 입력 중이던 내용은 그대로이며 새 질문을 보낼 수 있습니다.";
 const EXPIRED = "보관 기간이 지난 답변을 이 기기에서도 지웠습니다.";
 const ACK_PENDING = "최종 답변 대기";
+const ACK_LABEL = "중간 답변";
+const FINAL_LABEL = "최종 답변";
 const report = (e: unknown) => status(e instanceof Error ? e.message : "작업을 완료하지 못했습니다.");
 const current = (version: number) => !exited && generation === version;
 function controls(): void {
@@ -389,8 +391,9 @@ function controls(): void {
   el("record-hint").hidden = !hint;
   el<HTMLButtonElement>("prev-message").disabled = history.index <= 0;
   el<HTMLButtonElement>("next-message").disabled = history.index < 0 || history.index >= history.messages.length - 1;
+  const stage = history.selected ? stageLabel(history.selected) : "";
   const position = history.messages.length
-    ? `${history.index + 1} / ${history.messages.length}개 메시지`
+    ? `${history.index + 1} / ${history.messages.length}개 메시지${stage ? ` · ${stage}` : ""}`
     : "아직 받은 메시지가 없습니다.";
   // Rewriting identical text can make some screen readers announce it again.
   if (el("message-position").textContent !== position) el("message-position").textContent = position;
@@ -500,14 +503,22 @@ function renderDisplay(quiet = captionShown()): void {
 function displayStatus(text: string): void {
   if (el("display").textContent !== text) el("display").textContent = text;
 }
+/**
+ * An utterance's acknowledgement and final answer are separate messages: the acknowledgement is labelled intermediate,
+ * and says the final answer is still coming until it is kept here; the final is labelled final beside its
+ * acknowledgement. A reply without an acknowledgement keeps no label.
+ */
+function stageLabel(reply: Reply): string {
+  if (reply.stage === "ack") return history.paired(reply) ? ACK_LABEL : `${ACK_LABEL} · ${ACK_PENDING}`;
+  return history.paired(reply) ? FINAL_LABEL : "";
+}
 /** The message position leads the header, so moving between replies with identical text is still visible. */
 function g2Header(): string {
   const reading = selection.startsWith("reply:") && history.index >= 0;
   const position = reading ? `답변 ${history.index + 1}/${history.messages.length}` : "";
-  // An acknowledgement is the model's first words, not its answer: G2 says the final answer is still coming.
-  const pending = reading && history.selected?.stage === "ack" ? ACK_PENDING : "";
+  const stage = reading && history.selected ? stageLabel(history.selected) : "";
   const note = headerNote?.view === view() ? headerNote.text : "";
-  return Array.from([position, pending, note, wakeLabel].filter(Boolean).join(" · ")).slice(0, 70).join("");
+  return Array.from([position, stage, note, wakeLabel].filter(Boolean).join(" · ")).slice(0, 70).join("");
 }
 function showSelectedReply(): void {
   const reply = history.selected;
@@ -674,8 +685,10 @@ async function poll(): Promise<void> {
         conversation === "erased"
           ? `${ERASED} 새 답변을 표시합니다.`
           : history.selected!.stage === "ack"
-            ? `Dot 응답 수신 · ${ACK_PENDING} · G2 표시를 요청합니다.`
-            : "Dot 답변 수신 · G2 표시를 요청합니다.",
+            ? `Dot ${ACK_LABEL} 수신 · ${ACK_PENDING} · G2 표시를 요청합니다.`
+            : history.paired(history.selected!)
+              ? `Dot ${FINAL_LABEL} 수신 · G2 표시를 요청합니다. ${ACK_LABEL}도 이전 메시지에 남아 있습니다.`
+              : "Dot 답변 수신 · G2 표시를 요청합니다.",
       );
       showSelectedReply();
     } else if (history.revision !== kept && selection === replyNotice) restoreReader();

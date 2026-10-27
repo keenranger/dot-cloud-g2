@@ -7,13 +7,13 @@ import { boundaryStep } from "./protocol.ts";
 
 test("the idle G2 body names the next setup step in the order the user resolves them", () => {
   assert.match(idleBody({ restored: false, connected: false, transcriber: false }), /확인하는 중/);
-  assert.match(idleBody({ restored: true, connected: false, transcriber: true }), /연결 코드/);
+  assert.match(idleBody({ restored: true, connected: false, transcriber: true }), /연결 키/);
   const key = idleBody({ restored: true, connected: true, transcriber: false });
   assert.match(key, /Soniox 키/);
   assert.match(key, /직접 입력/);
   const ready = idleBody({ restored: true, connected: true, transcriber: true });
   assert.match(ready, /길게 누른 채/);
-  assert.doesNotMatch(ready, /Soniox|연결 코드/);
+  assert.doesNotMatch(ready, /Soniox|연결 키/);
 });
 
 test("a G2 scroll past the first, last or no message gets a truthful header note", () => {

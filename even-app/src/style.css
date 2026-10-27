@@ -332,3 +332,22 @@ legend + label.check {
       border-color 120ms ease;
   }
 }
+
+.dashboard-link {
+  display: block;
+  padding: 0.6875rem 1.25rem;
+  min-height: 3rem;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  text-align: center;
+}
+.dashboard-link:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.dashboard-link[aria-disabled="true"] {
+  background: var(--idle);
+  color: var(--on-idle);
+}

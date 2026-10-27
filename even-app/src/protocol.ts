@@ -10,7 +10,7 @@ export function relayOrigin(value: string): string {
 export function pairCode(value: string): string {
   const code = value.replace(/\s+/g, "").toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(code))
-    throw new Error("연결 코드는 서버 대시보드에 표시된 64자리 코드(0-9, a-f) 전체를 붙여 넣으세요.");
+    throw new Error("연결 키는 서버 대시보드에 표시된 64자리 연결 키(0-9, a-f) 전체를 붙여 넣으세요.");
   return code;
 }
 

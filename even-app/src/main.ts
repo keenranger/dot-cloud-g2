@@ -418,7 +418,7 @@ async function request<T>(path: string, method = "GET", body?: BodyInit, type = 
       headers: { Authorization: `Bearer ${saved.token}`, ...(body ? { "Content-Type": type } : {}) },
     });
     if (!current(version)) throw new DOMException("Connection changed", "AbortError");
-    if (response.status === 401) throw new Error("연결이 만료되었습니다. 연결 해제 후 새 코드로 연결하세요.");
+    if (response.status === 401) throw new Error("연결이 만료되었습니다. 연결 해제 후 새 연결 키로 연결하세요.");
     if (response.status === 410)
       throw new UtteranceGone(
         "대화 기록 삭제 또는 보관 기간 만료로 서버가 이 질문을 받지 않았습니다. 자동으로 다시 보내지 않으며, 다시 전송하면 새 질문으로 보냅니다.",
@@ -1028,6 +1028,63 @@ el("text").onkeydown = (event) => {
     el("send").click();
   }
 };
+// Standard HTTPS navigation: external-browser and return behavior needs physical WebView QA.
+let dashboardCopying = false;
+function updateDashboard(): string | undefined {
+  const link = el<HTMLAnchorElement>("dashboard-link");
+  const address = el<HTMLInputElement>("dashboard-address");
+  const copy = el<HTMLButtonElement>("copy-dashboard");
+  el("dashboard-status").textContent = "";
+  try {
+    const origin = relayOrigin(el<HTMLInputElement>("origin").value.trim());
+    link.href = origin;
+    link.removeAttribute("aria-disabled");
+    address.value = origin;
+    copy.disabled = dashboardCopying;
+    return origin;
+  } catch {
+    link.removeAttribute("href");
+    link.setAttribute("aria-disabled", "true");
+    address.value = "";
+    copy.disabled = true;
+    el("dashboard-status").textContent = "대시보드를 열려면 경로 없는 HTTPS 서버 기본 주소를 입력하세요.";
+  }
+}
+el("origin").oninput = () => {
+  updateDashboard();
+};
+el("dashboard-link").onclick = (event) => {
+  if (!updateDashboard()) event.preventDefault();
+};
+el("copy-dashboard").onclick = async () => {
+  if (dashboardCopying) return;
+  const origin = updateDashboard();
+  if (!origin) return;
+  dashboardCopying = true;
+  el<HTMLButtonElement>("copy-dashboard").disabled = true;
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(origin);
+    copied = true;
+  } catch {
+    // A visible selectable address works even when Clipboard API permission is unavailable.
+  } finally {
+    dashboardCopying = false;
+    const currentOrigin = updateDashboard();
+    if (currentOrigin === origin) {
+      el("dashboard-status").textContent = copied
+        ? "대시보드 주소를 복사했습니다. 휴대폰 브라우저에서 여세요."
+        : "복사하지 못했습니다. 위 대시보드 주소를 길게 눌러 직접 복사하세요.";
+      if (!copied) {
+        const address = el<HTMLInputElement>("dashboard-address");
+        address.focus();
+        address.select();
+      }
+    }
+  }
+};
+updateDashboard();
+
 /** Pairing results stay next to the pairing form as well as in the page status. */
 function pairNotice(text: string): void {
   el("pair-status").textContent = text;
@@ -1088,7 +1145,7 @@ el<HTMLFormElement>("pair").onsubmit = (event) => {
       if (!response.ok)
         throw new Error(
           response.status === 400 || response.status === 401 || response.status === 404
-            ? `연결 코드가 맞지 않거나 만료되었습니다 (${response.status}). 새 코드를 받아 다시 입력하세요.`
+            ? `연결 키가 맞지 않거나 만료되었습니다 (${response.status}). 새 연결 키를 받아 다시 입력하세요.`
             : `서버 연결 실패 (${response.status}) · 잠시 뒤 다시 시도하세요.`,
         );
       const result = (await response.json()) as { token: string };
@@ -1096,7 +1153,7 @@ el<HTMLFormElement>("pair").onsubmit = (event) => {
       if (!result.token) throw new Error("서버가 연결 토큰을 반환하지 않았습니다.");
       const saved = { origin, token: result.token };
       if (!(await saveCredentials(JSON.stringify(saved))))
-        throw new Error("연결 정보를 저장하지 못했습니다. 새 코드로 다시 연결하세요.");
+        throw new Error("연결 정보를 저장하지 못했습니다. 새 연결 키로 다시 연결하세요.");
       if (!current(version)) return;
       credentials = saved;
       el<HTMLInputElement>("code").value = "";
@@ -1371,15 +1428,15 @@ void (async () => {
       if (typeof parsed.token === "string" && parsed.token) {
         credentials = { origin: relayOrigin(parsed.origin), token: parsed.token };
         el<HTMLInputElement>("origin").value = credentials.origin;
+        updateDashboard();
       }
     } catch {
-      status("저장된 연결 설정이 올바르지 않습니다. 새 코드로 연결하세요.");
+      status("저장된 연결 설정이 올바르지 않습니다. 새 연결 키로 연결하세요.");
     }
   }
   controls();
   status(
-    settingsNote ??
-      (credentials ? "저장된 서버 연결을 사용합니다." : "G2 준비됨 · 서버 주소와 연결 코드를 입력하세요."),
+    settingsNote ?? (credentials ? "저장된 서버 연결을 사용합니다." : "G2 준비됨 · 서버 주소와 연결 키를 입력하세요."),
   );
   syncWake();
   void poll();

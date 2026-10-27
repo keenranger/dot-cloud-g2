@@ -40,6 +40,7 @@ let boots = 0;
 async function boot(options = {}) {
   const names = [
     "document",
+    "navigator",
     "window",
     "fetch",
     "setTimeout",
@@ -78,15 +79,31 @@ async function boot(options = {}) {
         checked: false,
         disabled: false,
         hidden: false,
-        setAttribute() {},
-        removeAttribute() {},
-        focus() {},
+        attributes: new Map(),
+        setAttribute(name, value) {
+          this.attributes.set(name, value);
+        },
+        removeAttribute(name) {
+          this.attributes.delete(name);
+          if (name === "href") delete this.href;
+        },
+        focus() {
+          this.focused = true;
+        },
+        select() {
+          this.selected = true;
+        },
         click() {
           this.onclick?.();
         },
       });
     return elements.get(id);
   };
+  h.get("origin").value = "https://hey-dots-g2.keenranger.chatgpt.site";
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { writeText: options.copy ?? (async () => {}) } },
+  });
   // index.html ships both voice preferences checked.
   h.get("wake-enabled").checked = true;
   h.get("auto-send").checked = true;
@@ -2011,5 +2028,76 @@ test("a deferred reply survives review mode, cancel and an unknown outcome, but 
     } finally {
       h.restore();
     }
+  }
+});
+
+test("dashboard follows validated custom origins and blocks unsafe destinations", async () => {
+  const h = await boot({ storage: { "dot-cloud-device-v1": DEVICE } });
+  try {
+    assert.equal(h.get("dashboard-link").href, "https://fixture.example");
+    for (const value of [
+      "javascript:alert(1)",
+      "http://example.com",
+      "https://u:p@example.com",
+      "https://example.com/mcp",
+      "https://example.com/?key=secret",
+      "https://example.com/#secret",
+    ]) {
+      h.get("origin").value = value;
+      h.get("origin").oninput();
+      let prevented = false;
+      h.get("dashboard-link").onclick({
+        preventDefault() {
+          prevented = true;
+        },
+      });
+      assert.equal(prevented, true);
+      assert.equal(h.get("dashboard-link").href, undefined);
+      assert.equal(h.get("dashboard-address").value, "");
+      assert.equal(h.get("copy-dashboard").disabled, true);
+    }
+    h.get("origin").value = " https://custom.example:8443/ ";
+    h.get("origin").oninput();
+    assert.equal(h.get("dashboard-link").href, "https://custom.example:8443");
+    assert.equal(h.get("dashboard-address").value, "https://custom.example:8443");
+  } finally {
+    h.restore();
+  }
+});
+
+test("dashboard copy deduplicates clicks, handles failure, and ignores stale feedback after edits", async () => {
+  let finish;
+  const copies = [];
+  const h = await boot({
+    copy: (value) => {
+      copies.push(value);
+      return new Promise((resolve, reject) => {
+        finish = { resolve, reject };
+      });
+    },
+  });
+  try {
+    const first = h.get("copy-dashboard").onclick();
+    await h.get("copy-dashboard").onclick();
+    assert.equal(copies.length, 1);
+    finish.reject(new Error("denied"));
+    await first;
+    assert.match(h.get("dashboard-status").textContent, /직접 복사/);
+    assert.equal(h.get("dashboard-address").focused, true);
+    assert.equal(h.get("dashboard-address").selected, true);
+    const second = h.get("copy-dashboard").onclick();
+    h.get("origin").value = "https://changed.example";
+    h.get("origin").oninput();
+    finish.resolve();
+    await second;
+    assert.equal(h.get("dashboard-status").textContent, "");
+    assert.equal(h.get("dashboard-address").value, "https://changed.example");
+    const third = h.get("copy-dashboard").onclick();
+    finish.resolve();
+    await third;
+    assert.match(h.get("dashboard-status").textContent, /복사했습니다/);
+    assert.equal(copies.at(-1), "https://changed.example");
+  } finally {
+    h.restore();
   }
 });

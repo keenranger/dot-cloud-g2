@@ -1,6 +1,6 @@
 # Even Hub cloud companion
 
-This independent companion connects G2 directly to the hosted relay and to Soniox speech-to-text. It requires no Mac service and no customer-run server. The owner signs into the relay in ChatGPT, creates a connection key (no expiry, reusable, and shown again on the dashboard to the signed-in owner; a newer key replaces it), then enters the relay HTTPS origin and key in this app's `연결 코드` field. Only the returned device-scoped bearer token is saved through Even Hub native local storage; ChatGPT browser cookies and owner tokens are not copied to the glasses app.
+This independent companion connects G2 directly to the hosted relay and to Soniox speech-to-text. It requires no Mac service and no customer-run server. The owner signs into the relay in ChatGPT, creates a connection key (no expiry, reusable, and shown again on the dashboard to the signed-in owner; a newer key replaces it), then enters the relay HTTPS origin and key in this app's `연결 키` field. Only the returned device-scoped bearer token is saved through Even Hub native local storage; ChatGPT browser cookies and owner tokens are not copied to the glasses app.
 
 ## Build
 
@@ -56,3 +56,9 @@ In 0.5.0, expiry removes an expired reply from the phone reader even while G2 sh
 ## 0.5.0 Private deployment (2026-10-24)
 
 Sites version 6 deployed successfully on 2026-10-24 at 12:16:10.672605 UTC from signed source `7f48b9c4d217e4e111477c5aed261c08133ed841`. Even Hub CLI upload and read-back confirmed version 0.5.0, build 120792, Private, with no channels. Public store release, beta promotion and policy approval are not established. Artifact: `outputs/dot-cloud-0.5.0.ehpk`, 7,566,491 bytes, SHA-256 `daee63bd8776fbd7c958ae4a1a6759cdfa78abad322a526140cc15ee85dc52c4`. SDK 0.0.16, minimum Even app 2.2.10. See [deployment evidence](../docs/release-0.5.0-deployment.md). Upload is not phone installation or runtime acceptance.
+
+## Phone connection guidance
+
+The form links to the validated HTTPS server origin (including custom servers), never `/mcp`. Log into the dashboard, create or reveal a connection key, copy it, manually return and paste it. Normal HTTPS navigation uses `noopener noreferrer` and no referrer, with no key or token in the URL. No external-browser SDK or automatic deep-link return is assumed. Clipboard failure focuses and selects the visible read-only address for manual copying. Invalid origins disable navigation and copying; edits and restored connections refresh the destination.
+
+Physical iOS/Android Even WebView QA remains required: verify link routing, login and key copying, manual return without losing the page, paste and pair, and clipboard-denied manual copying. Desktop tests cannot prove app lifetime, external browser routing or OS selection menus.

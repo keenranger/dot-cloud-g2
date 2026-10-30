@@ -1,78 +1,76 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { chatGPTSignInPath, chatGPTSignOutPath, getChatGPTUser } from "./chatgpt-auth";
 import Dashboard from "./components/dashboard";
+import LanguageSwitch from "./components/language-switch";
+import { LOCALE_COOKIE, PRODUCT_NAME, copy, localePath, resolveLocale } from "./i18n/dashboard";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
+export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | string[]>> }) {
+  // An explicit ?lang= wins, then the saved choice, then English.
+  const locale = resolveLocale((await searchParams).lang, (await cookies()).get(LOCALE_COOKIE)?.value);
+  const t = copy[locale].page;
   const user = await getChatGPTUser();
   return (
-    <div className="shell">
+    <div className="shell" lang={locale}>
       <header className="site-header">
-        <Link className="brand" href="/" aria-label="G2 Bridge 홈">
+        <Link className="brand" href={localePath(locale)} aria-label={t.home}>
           <span className="brand-mark" aria-hidden="true">
             g2
           </span>{" "}
-          G2 Bridge
+          {PRODUCT_NAME}
         </Link>
-        <span className="header-note">EVEN HUB × CHATGPT</span>
+        <span className="header-note">{t.headerNote}</span>
+        <LanguageSwitch locale={locale} />
         {user && (
-          <a className="text-link" href={chatGPTSignOutPath()} target="_top">
-            로그아웃
+          <a className="text-link" href={chatGPTSignOutPath(localePath(locale))} target="_top">
+            {t.signOut}
           </a>
         )}
       </header>
       <main id="main">
         <section className="intro">
-          <p className="eyebrow">A SMALL BRIDGE, A BIGGER CONVERSATION</p>
+          <p className="eyebrow">{t.eyebrow}</p>
           <h1>
-            안경에서 말하고,
+            {t.titleLines[0]}
             <br />
-            <span>Dot과 이어가세요.</span>
+            <span>{t.titleLines[1]}</span>
           </h1>
-          <p className="intro-copy">
-            내 Even G2의 음성을 ChatGPT 안의 내 Dot에 전하고,
-            <br />
-            답변을 다시 안경 화면으로 가져옵니다.
-          </p>
-          <div className="flow" aria-label="연결 경로">
-            <span>Even G2</span>
-            <span aria-hidden="true">→</span>
-            <span>Even Hub</span>
-            <span aria-hidden="true">→</span>
-            <span>Dot</span>
-            <span aria-hidden="true">→</span>
-            <span>G2 화면</span>
-          </div>
+          <p className="intro-copy">{t.intro}</p>
+          <ol className="flow" aria-label={t.flowLabel}>
+            {t.flow.map((step) => (
+              <li key={step}>
+                <span>{step}</span>
+              </li>
+            ))}
+          </ol>
+          <p className="intro-needs">{t.needs}</p>
         </section>
         {user ? (
-          <Dashboard displayName={user.displayName} />
+          <Dashboard displayName={user.displayName} locale={locale} />
         ) : (
           <section className="signin-panel" aria-labelledby="signin-title">
             <div>
-              <p className="eyebrow">01 / 시작하기</p>
-              <h2 id="signin-title">내 ChatGPT 계정으로 연결 준비</h2>
-              <p>
-                로그인하면 내 Dot과 G2를 위한 개인 연결 설정을 시작할 수 있습니다. Mac에 별도 프로그램을 설치할 필요가
-                없습니다.
-              </p>
+              <p className="eyebrow">{t.signInEyebrow}</p>
+              <h2 id="signin-title">{t.signInTitle}</h2>
+              <p>{t.signInBody}</p>
             </div>
-            <a className="button primary" href={chatGPTSignInPath("/")} target="_top">
-              Sign in with ChatGPT <span aria-hidden="true">↗</span>
+            <a className="button primary" href={chatGPTSignInPath(localePath(locale))} target="_top">
+              {t.signIn} <span aria-hidden="true">↗</span>
             </a>
           </section>
         )}
-        <aside className="verification-note">
+        <aside className="verification-note" aria-labelledby="preview-title">
           <span className="status-dot" aria-hidden="true" />
           <p>
-            <strong>연결 검증 진행 중</strong> · ChatGPT 로그인과 G2 페어링은 별개입니다. Dot 이벤트 수신과 실제 안경의
-            음성·화면 왕복은 아직 검증되지 않았습니다.
+            <strong id="preview-title">{t.previewTitle}</strong> · {t.previewBody}
           </p>
         </aside>
       </main>
       <footer>
-        <span>G2 Bridge</span>
-        <span>안경과 대화 사이, 필요한 연결만.</span>
+        <span>{PRODUCT_NAME}</span>
+        <span>{t.footer}</span>
       </footer>
     </div>
   );

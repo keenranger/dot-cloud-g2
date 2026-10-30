@@ -6,9 +6,9 @@ Live portal state on 2026-10-24 (`outputs/release-readiness/environment-audit.md
 
 Tagline (English): Your ChatGPT Dot on G2, connected through MCP
 
-Description (English): Lens MCP for G2 is an independent G2 companion for your ChatGPT Dot through MCP. Speak or type a question and read its replies on your glasses. It is not an official Even Realities app or a general-purpose MCP client. Pair the companion with your relay in ChatGPT. Hold to speak, or use local “Hey dots” detection while the glasses session is active. Voice transcription uses your own Soniox key. Setup requires the phone, a connected ChatGPT Dot and a Soniox account for speech. Typed messages work without a speech key. Background availability depends on the phone OS and Even app; locked-phone support is awaiting physical beta verification.
+Description (English): Dots Lens for G2 is an independent G2 companion for your ChatGPT Dot. Speak or type a question and read its replies on your glasses. It is not an official Even Realities app or a general-purpose MCP client. Pair the companion with your relay in ChatGPT. Hold to speak, or use local “Hey dots” detection while the glasses session is active. Voice transcription uses your own Soniox key. Setup requires the phone, a connected ChatGPT Dot and a Soniox account for speech. Typed messages work without a speech key. Background availability depends on the phone OS and Even app; locked-phone support is awaiting physical beta verification.
 
-Description (Korean): Lens MCP for G2는 MCP로 본인의 ChatGPT Dot에 연결하는 독립 G2 앱입니다. 음성이나 텍스트로 질문하고 안경에서 답변을 읽으세요. Even Realities 공식 앱이나 범용 MCP 클라이언트가 아닙니다. ChatGPT에서 연결 코드를 만든 다음 휴대폰으로 연결합니다. 길게 눌러 말하거나, 안경 세션이 실행되는 동안 로컬 “Hey dots” 호출을 사용할 수 있습니다. 음성 전사에는 본인의 Soniox 키가 필요하며, 텍스트 입력은 키 없이 사용할 수 있습니다. 백그라운드 동작은 휴대폰 OS와 Even 앱에 따라 달라지며, 잠금 상태 동작은 물리 기기 베타 검증을 기다리고 있습니다.
+Description (Korean): Dots Lens for G2는 본인의 ChatGPT Dot에 연결하는 독립 G2 앱입니다. 음성이나 텍스트로 질문하고 안경에서 답변을 읽으세요. Even Realities 공식 앱이나 범용 MCP 클라이언트가 아닙니다. ChatGPT에서 연결 코드를 만든 다음 휴대폰으로 연결합니다. 길게 눌러 말하거나, 안경 세션이 실행되는 동안 로컬 “Hey dots” 호출을 사용할 수 있습니다. 음성 전사에는 본인의 Soniox 키가 필요하며, 텍스트 입력은 키 없이 사용할 수 있습니다. 백그라운드 동작은 휴대폰 OS와 Even 앱에 따라 달라지며, 잠금 상태 동작은 물리 기기 베타 검증을 기다리고 있습니다.
 
 Release notes for 0.5.0 candidate (Even Hub asks for 1–3 lines per supported language describing user-visible changes; use only after the build is verified):
 
@@ -39,7 +39,7 @@ No API key or secret is bundled in the package. Voice transcription uses a Sonio
 - Relay domain: https://hey-dots-g2.keenranger.chatgpt.site . Soniox: wss://stt-rt.soniox.com . The network whitelist includes the matching HTTPS Soniox host. Do not bundle keys in distributable packages.
 - No claim of medical, financial or emergency use. No optical display confirmation is available from the server.
 
-Selected name: Lens MCP for G2. Approved public developer/contact (2026-10-24): keenranger / kghnkl0103@gmail.com. Open owner decisions: whether portal telephone/address are public; publishable privacy/terms location and legal review; portal Category; reviewer test-account provisioning; final description and localized release notes after physical QA. Settled: 30-day retention with owner erase; iPhone + G2 target; default-on Hey dots, including while the phone is locked or backgrounded, with the explicit choice remembered; session-only Soniox key with explicit remember opt-in.
+Selected name: Dots Lens for G2 (source rename from Lens MCP for G2 on 2026-10-30; the portal listing keeps the old name until it is updated with the next upload). Approved public developer/contact (2026-10-24): keenranger / kghnkl0103@gmail.com. Open owner decisions: whether portal telephone/address are public; publishable privacy/terms location and legal review; portal Category; reviewer test-account provisioning; final description and localized release notes after physical QA. Settled: 30-day retention with owner erase; iPhone + G2 target; default-on Hey dots, including while the phone is locked or backgrounded, with the explicit choice remembered; session-only Soniox key with explicit remember opt-in.
 
 ### Candidate retention clarification — DRAFT
 

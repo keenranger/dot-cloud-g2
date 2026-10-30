@@ -1,6 +1,6 @@
-# Lens MCP for G2
+# Dots Lens for G2
 
-Lens MCP for G2 (source project: Dot Cloud G2) connects Even G2 to ChatGPT Dot without a Mac relay, using a Sites-hosted relay and an Even Hub companion. Each user signs in with ChatGPT, pairs their own companion with a permanent connection key, and connects their own Dot. Speech is not transcribed on the device: the companion streams audio from the phone directly to Soniox's cloud over WebSocket with the user's own API key, and only the resulting transcript reaches the relay. The relay delivers utterance events to Dot, then returns its MCP reply to the paired G2. An actual cloud Dot has reported an active subscription. Separately, a proactive message sent through the native MCP from the root Codex development conversation was physically confirmed on G2 by the user; no cloud-Dot-initiated physical reply and no complete Mac-off voice round trip has been verified.
+Dots Lens for G2 (formerly Lens MCP for G2; source project: Dot Cloud G2) connects Even G2 to ChatGPT Dot without a Mac relay, using a Sites-hosted relay and an Even Hub companion. Each user signs in with ChatGPT, pairs their own companion with a permanent connection key, and connects their own Dot. Speech is not transcribed on the device: the companion streams audio from the phone directly to Soniox's cloud over WebSocket with the user's own API key, and only the resulting transcript reaches the relay. The relay delivers utterance events to Dot, then returns its MCP reply to the paired G2. An actual cloud Dot has reported an active subscription. Separately, a proactive message sent through the native MCP from the root Codex development conversation was physically confirmed on G2 by the user; no cloud-Dot-initiated physical reply and no complete Mac-off voice round trip has been verified.
 
 This project is independent of the upstream Dot Link reference checkout (`even-g2-dots`). It does not install a Mac background service or require Tailscale.
 
@@ -85,7 +85,7 @@ See [the companion README](even-app/README.md) for SDK interaction and build det
 Transcription is processed in Soniox's cloud, called directly from the phone with the user's own [Soniox](https://soniox.com) account. The Site never receives, stores, or relays the key, and no server-side key setup is required.
 
 1. In the Soniox console, create an API key that has the real-time transcription permission. See [API key permissions](https://soniox.com/docs/guides/api-key-permissions).
-2. On the phone, open the Lens MCP for G2 app in Even Hub, open its settings, and paste the key.
+2. On the phone, open the Dots Lens for G2 app in Even Hub, open its settings, and paste the key.
 3. By default the key is held in memory for the current app session only. Optionally choose to remember it, which keeps it in Even Hub app storage on that phone. The same settings let you clear or replace the key at any time.
 
 Security notes:

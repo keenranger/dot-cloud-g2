@@ -1,4 +1,4 @@
-# Lens MCP for G2 — privacy notice and terms approval draft
+# Dots Lens for G2 — privacy notice and terms approval draft
 
 **LOCAL DRAFT — NOT PUBLISHED, NOT LEGALLY REVIEWED, NOT APPROVED FOR PUBLIC USE.** Prepared 2026-10-23, updated 2026-10-24 for the local 0.5.0 candidate (source base `a266438` plus uncommitted backend and companion changes whose final review is pending). Current production is Even Hub 0.4.2 (Private build) with a relay that does not yet include the retention and deletion behavior described here. The owner approved the 30-day retention and owner-erase requirement and the iPhone + G2 target. Public developer/operator display name and support/privacy email are approved as recorded below. Policy URL, effective date, phone/address and legal approval remain unresolved; their placeholders must stay visibly unfilled until approved.
 
@@ -10,7 +10,7 @@
 
 Operator public display name: **keenranger**. Support/privacy contact: **kghnkl0103@gmail.com**. Approved for public use on 2026-10-24; this does not identify a legal personal name or validate mailbox operation. Portal telephone and address: not to be filled until it is confirmed whether the portal shows them publicly.
 
-Lens MCP for G2 is an independent companion connecting the user's ChatGPT Dot through MCP to G2 glasses. It is not an official Even Realities product and is not a general-purpose MCP client. The phone hosts the companion. Setup uses a reusable relay connection key; voice transcription additionally uses the user's Soniox account/key.
+Dots Lens for G2 is an independent companion connecting the user's ChatGPT Dot through MCP to G2 glasses. It is not an official Even Realities product and is not a general-purpose MCP client. The phone hosts the companion. Setup uses a reusable relay connection key; voice transcription additionally uses the user's Soniox account/key.
 
 ### Information processed and why
 
@@ -59,7 +59,7 @@ The app uses HTTPS/WSS endpoints, device-scoped bearer authentication, owner-sco
 
 ## Terms of use — approval draft
 
-1. **Scope:** Lens MCP for G2 provides the independent ChatGPT Dot connection described above. It does not promise compatibility with every MCP server/agent. It requires compatible G2/Even app software, a phone, network access, the user's connected ChatGPT Dot and, for speech, the user's Soniox account/key.
+1. **Scope:** Dots Lens for G2 provides the independent ChatGPT Dot connection described above. It does not promise compatibility with every MCP server/agent. It requires compatible G2/Even app software, a phone, network access, the user's connected ChatGPT Dot and, for speech, the user's Soniox account/key.
 2. **User accounts and provider charges:** users control the accounts and keys they supply and must be entitled to use them. Third-party provider terms and charges apply separately. The app does not create provider accounts or include paid transcription credit.
 3. **Operation and limitations:** transcription may contain mistakes; generated replies may be incorrect. Review outputs before relying on them. Do not use this companion for emergencies or as a substitute for professional medical, legal or financial advice. Interact with glasses only when it is safe. Background availability depends on the host app/OS and is not guaranteed. No physical runtime success is established by simulator output.
 4. **Privacy:** the approved privacy notice must accompany these terms. In production 0.4.2, relay conversations have no automatic deletion period or self-service deletion. The 0.5.0 candidate adds a 30-day cutoff and an owner erase control as described in the notice; physical cleanup timing is not guaranteed to the day, and provider copies are outside the relay's control. Device revocation is not conversation deletion.

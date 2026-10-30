@@ -1,25 +1,35 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#f3f5f7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#14181b" media="(prefers-color-scheme: dark)" />
-    <title>Lens MCP for G2</title>
+    <title>Dots Lens for G2</title>
   </head>
   <body>
     <main>
       <header class="intro">
-        <h1>Lens MCP for G2</h1>
-        <p class="lede">Mac 없이 음성을 Dot으로 보내고, 답변을 안경에서 확인합니다.</p>
-        <p id="status" role="status" aria-live="polite">Even Hub 연결 확인 중</p>
+        <h1>Dots Lens for G2</h1>
+        <p id="lede" class="lede">Ask Dot by voice and read the replies on your glasses.</p>
+        <fieldset class="language">
+          <legend>Language · <span lang="ko">언어</span></legend>
+          <div class="language-options">
+            <label class="choice"
+              ><input id="language-en" type="radio" name="language" value="en" checked />English</label
+            ><label class="choice" lang="ko"
+              ><input id="language-ko" type="radio" name="language" value="ko" />한국어</label
+            >
+          </div>
+        </fieldset>
+        <p id="status" role="status" aria-live="polite">Checking the Even app connection</p>
       </header>
       <div class="group">
         <form id="pair">
           <fieldset>
-            <legend>서버 연결</legend>
-            <label for="origin">휴대폰 앱 서버 기본 주소 (HTTPS)</label
+            <legend id="pair-legend">Connect to your server</legend>
+            <label id="origin-label" for="origin">Server address (HTTPS)</label
             ><input
               id="origin"
               type="url"
@@ -29,8 +39,9 @@
               autocomplete="url"
               autocapitalize="off"
               spellcheck="false"
+              aria-describedby="origin-hint"
             />
-            <p class="hint">끝에 /mcp를 붙이지 마세요. /mcp는 ChatGPT MCP 연결에만 사용합니다.</p>
+            <p id="origin-hint" class="hint">Don't add /mcp at the end. /mcp is only for connecting ChatGPT.</p>
             <div class="actions">
               <a
                 id="dashboard-link"
@@ -39,19 +50,22 @@
                 target="_blank"
                 rel="noopener noreferrer"
                 referrerpolicy="no-referrer"
-                >연결 키 만들기 · 대시보드 열기</a
+                ><span id="dashboard-link-text">Get a connection key from your dashboard</span>
+                <span id="dashboard-link-note" class="link-note">(opens in your browser)</span></a
               >
-              <button id="copy-dashboard" class="quiet" type="button">대시보드 주소 복사</button>
+              <button id="copy-dashboard" class="quiet" type="button">Copy dashboard address</button>
             </div>
-            <p class="hint">
-              대시보드에서 로그인 → 연결 키 만들기 (또는 키 확인) → 키 복사 → 이 화면으로 돌아와 붙여 넣기 → 연결 순서로
-              진행하세요.
+            <p id="dashboard-steps" class="hint">
+              In the dashboard, sign in, create a connection key (or view your key), and copy it. Then come back here,
+              paste it, and tap Connect.
             </p>
-            <p class="hint">
-              링크가 열리지 않으면 아래 주소를 복사해 휴대폰 브라우저에서 여세요. 돌아올 때는 Even 앱에서 이 화면을 직접
-              여세요.
+            <p id="dashboard-fallback" class="hint">
+              If the link doesn't open, copy the address below and open it in your phone's browser. To come back, open
+              this screen again from the Even app.
             </p>
-            <label for="dashboard-address">대시보드 주소 (길게 눌러 직접 복사 가능)</label>
+            <label id="dashboard-address-label" for="dashboard-address"
+              >Dashboard address (press and hold to copy)</label
+            >
             <input
               id="dashboard-address"
               type="text"
@@ -61,7 +75,7 @@
               spellcheck="false"
             />
             <p id="dashboard-status" class="field-status" role="status" aria-live="polite"></p>
-            <label for="code">연결 키</label
+            <label id="code-label" for="code">Connection key</label
             ><input
               id="code"
               required
@@ -71,23 +85,42 @@
               spellcheck="false"
               aria-describedby="code-hint pair-status"
             />
-            <p id="code-hint" class="hint">서버 대시보드에서 만든 64자리 연결 키를 그대로 붙여 넣으세요.</p>
+            <p id="code-hint" class="hint">
+              Paste the 64-character connection key you created in your server dashboard.
+            </p>
             <div class="actions">
-              <button id="pair-submit" disabled>연결</button>
+              <button id="pair-submit" disabled>Connect</button>
             </div>
             <p id="pair-status" class="field-status" role="status" aria-live="polite"></p>
           </fieldset>
         </form>
-        <button id="disconnect" class="quiet danger" hidden>연결 해제 · 저장된 토큰 지우기</button>
+        <button id="disconnect" class="quiet danger" hidden>Disconnect and forget this connection</button>
       </div>
       <form id="soniox" class="group">
         <fieldset>
-          <legend>음성 전사 (본인 Soniox 키)</legend>
-          <p id="soniox-privacy" class="note">
-            녹음은 이 휴대폰에서 Soniox(stt-rt.soniox.com)로 직접 보내 전사하고, 서버에는 전사된 텍스트만 보냅니다. 키와
-            오디오는 서버로 보내지 않습니다. Soniox 콘솔에서 실시간 음성 인식 권한만 있는 전용 키를 만들어 쓰세요.
+          <legend id="soniox-legend">Voice transcription (your Soniox key)</legend>
+          <p id="soniox-get-intro" class="note">
+            To ask by voice, you need your own Soniox API key. Sign up or sign in at the Soniox Console, create an API
+            key, then paste it below.
           </p>
-          <label for="soniox-key">Soniox API 키</label
+          <div class="actions">
+            <a
+              id="soniox-console-link"
+              class="dashboard-link"
+              href="https://console.soniox.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              referrerpolicy="no-referrer"
+              ><span id="soniox-console-text">Get a Soniox API key</span>
+              <span id="soniox-console-note" class="link-note">(opens the Soniox Console in your browser)</span></a
+            >
+          </div>
+          <p id="soniox-privacy" class="note">
+            Your voice goes straight from this phone to Soniox to become text, and only that text is sent to your
+            server. Your key and your audio never reach the server. For safety, create a separate key in the Soniox
+            Console just for this app.
+          </p>
+          <label id="soniox-key-label" for="soniox-key">Soniox API key</label
           ><input
             id="soniox-key"
             type="password"
@@ -97,75 +130,79 @@
             spellcheck="false"
             aria-describedby="soniox-privacy soniox-status"
           /><label class="check"
-            ><input id="soniox-remember" type="checkbox" aria-describedby="soniox-remember-hint" />이 기기에 키
-            기억하기</label
+            ><input id="soniox-remember" type="checkbox" aria-describedby="soniox-remember-hint" /><span
+              id="soniox-remember-text"
+              >Remember the key on this phone</span
+            ></label
           >
           <p id="soniox-remember-hint" class="hint check-hint">
-            끄면 메모리에만 두고 앱을 닫으면 사라집니다. 키가 적용된 상태에서 바꾸면 바로 저장하거나 지웁니다. Even 앱
-            저장소에 저장되며 암호화 여부는 확인되지 않았습니다.
+            When off, the key is kept only until you close the app. Changing this while a key is set saves or removes it
+            right away. The key is kept in Even app storage, which may not be encrypted.
           </p>
           <div class="actions">
-            <button id="soniox-apply" disabled>키 적용</button
-            ><button id="soniox-clear" class="quiet" type="button" hidden>키 지우기</button>
+            <button id="soniox-apply" disabled>Use this key</button
+            ><button id="soniox-clear" class="quiet" type="button" hidden>Remove key</button>
           </div>
-          <p id="soniox-status" class="field-status" role="status" aria-live="polite">
-            Soniox 키가 설정되지 않았습니다.
-          </p>
+          <p id="soniox-status" class="field-status" role="status" aria-live="polite"></p>
         </fieldset>
       </form>
       <section class="group" aria-labelledby="voice">
-        <h2 id="voice">메시지 보내기</h2>
-        <p class="note">
-          G2에서 길게 누른 채 말하고 손을 떼면 Soniox로 전사한 뒤 자동으로 Dot에 전송합니다. 최대 30초이며 Soniox 키가
-          필요합니다.
+        <h2 id="voice">Ask Dot</h2>
+        <p id="voice-note" class="note">
+          On G2, press and hold, speak, then let go. What you said is turned into text and sent to Dot automatically. Up
+          to 30 seconds; needs a Soniox key.
         </p>
         <label class="check"
-          ><input id="auto-send" type="checkbox" checked />음성 전사 후 자동 전송 (끄면 전사 내용을 검토하고
-          전송)</label
+          ><input id="auto-send" type="checkbox" checked /><span id="auto-send-text"
+            >Send automatically after transcription (turn off to review before sending)</span
+          ></label
         >
         <label class="check"
-          ><input id="wake-enabled" type="checkbox" checked aria-describedby="wake-status wake-hint" />Hey dots 로컬
-          음성 호출 (기본 켜짐 · G2에서 앱이 열려 있는 동안 G2 마이크 사용)</label
+          ><input id="wake-enabled" type="checkbox" checked aria-describedby="wake-status wake-hint" /><span
+            id="wake-text"
+            >Hey dots hands-free voice (on by default; uses the G2 microphone while the app is open on G2)</span
+          ></label
         >
-        <p id="wake-status" class="field-status check-hint" role="status" aria-live="polite">Hey dots 준비 확인 중</p>
+        <p id="wake-status" class="field-status check-hint" role="status" aria-live="polite"></p>
         <p id="wake-hint" class="hint check-hint">
-          G2 준비, 서버 연결, Soniox 키가 모두 있을 때만 G2 마이크를 열고, 호출어는 이 휴대폰에서 로컬로 감지합니다.
-          G2에서 앱이 열려 있는 동안 동작하며, 휴대폰 화면이 꺼지거나 잠겨도 이 앱은 듣기와 답변 확인을 계속합니다. 잠금
-          중 동작은 Even 앱과 휴대폰의 백그라운드 실행 제한에 영향을 받을 수 있습니다. 휴대폰 마이크는 쓰지 않습니다.
-          영어 발음 Hey dots 뒤에 질문을 말하면, 호출 뒤 질문만 Soniox로 전사하고 그 텍스트를 서버로 전송합니다.
-          한국어식 발음 인식 정확도는 확인되지 않았습니다. 끄면 즉시 듣기를 멈춥니다.
+          The G2 microphone opens only when G2 is ready, you are connected, and a Soniox key is set. This phone listens
+          for the wake word itself, while the app is open on G2, and keeps listening and checking for replies even if
+          the phone screen turns off or locks; the Even app and your phone's background limits may affect this. The
+          phone's own microphone is not used. Say Hey dots (English pronunciation), then your question: only the
+          question after it is transcribed by Soniox and sent to your server as text. If it doesn't respond, press and
+          hold to speak instead. Turning this off stops listening right away.
         </p>
         <div class="compose">
           <p id="record-hint" class="hint" hidden></p>
           <div class="actions pair">
-            <button id="record" disabled aria-describedby="record-hint">녹음 시작</button
-            ><button id="stop" class="quiet" disabled>녹음 중지 · 전사</button>
+            <button id="record" disabled aria-describedby="record-hint">Start recording</button
+            ><button id="stop" class="quiet" disabled>Stop and transcribe</button>
           </div>
           <!-- Running non-final text changes many times a second; it is not announced and is never sent. -->
           <p id="partial" aria-live="off" hidden></p>
-          <label for="text">보낼 내용 (음성 대신 직접 입력 가능)</label
+          <label id="text-label" for="text">Message (you can type instead of speaking)</label
           ><textarea id="text" rows="4" maxlength="8000"></textarea>
           <div class="actions">
-            <button id="send" class="wide" disabled>Dot에 전송</button>
+            <button id="send" class="wide" disabled>Send to Dot</button>
           </div>
         </div>
       </section>
       <section class="group" aria-labelledby="reply-title">
-        <h2 id="reply-title">Dot 답변</h2>
+        <h2 id="reply-title">Replies from Dot</h2>
         <div class="reader">
-          <p id="message-position" role="status">아직 받은 메시지가 없습니다.</p>
-          <p id="reply" aria-live="polite">답변을 기다립니다.</p>
+          <p id="message-position" role="status">No messages yet.</p>
+          <p id="reply" aria-live="polite">Waiting for a reply.</p>
         </div>
         <div class="actions pair">
-          <button id="prev-message" class="quiet" disabled>이전 메시지</button
-          ><button id="next-message" class="quiet" disabled>다음 메시지</button>
+          <button id="prev-message" class="quiet" disabled>Previous message</button
+          ><button id="next-message" class="quiet" disabled>Next message</button>
         </div>
         <!-- Only shown when a reply is too long for one G2 update; the phone always shows the whole reply. -->
         <div class="actions pair">
-          <button id="prev" class="quiet" hidden>G2 이전 부분</button
-          ><button id="next" class="quiet" hidden>G2 다음 부분</button>
+          <button id="prev" class="quiet" hidden>Previous part on G2</button
+          ><button id="next" class="quiet" hidden>Next part on G2</button>
         </div>
-        <p id="display" class="field-status" role="status">G2 표시 확인 전</p>
+        <p id="display" class="field-status" role="status">Not shown on G2 yet</p>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

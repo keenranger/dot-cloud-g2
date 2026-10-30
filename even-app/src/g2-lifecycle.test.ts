@@ -46,11 +46,11 @@ test("hiding or locking the phone does not pause listening, capture or polling",
   // Only a genuine page unload fences the session: pagehide marks the page unloaded and pageshow brings it back.
   assert.match(
     main,
-    /addEventListener\("pagehide", \(event\) => \{\s+\/\/[^\n]*\n\s+if \(event\.persisted\) return;\s+pageLoaded = false;\s+pause\(\);\s+status\("[^"]+"\);\s+\}\);/,
+    /addEventListener\("pagehide", \(event\) => \{\s+\/\/[^\n]*\n\s+if \(event\.persisted\) return;\s+pageLoaded = false;\s+pause\(\);\s+status\(\s*\(\) =>\s*t\(\s*"[^"]+",\s*"[^"]+",?\s*\),?\s*\);\s+\}\);/,
   );
   assert.match(
     main,
-    /addEventListener\("pageshow", \(\) => \{\s+pageLoaded = true;\s+if \(!active && !exited\) status\("[^"]+"\);\s+resume\(\);\s+\}\);/,
+    /addEventListener\("pageshow", \(\) => \{\s+pageLoaded = true;\s+if \(!active && !exited\)\s+status\(\s*\(\) =>\s*t\(\s*"[^"]+",\s*"[^"]+",?\s*\),?\s*\);\s+resume\(\);\s+\}\);/,
   );
   // A G2 startup that settles after pagehide stays paused.
   assert.match(main, /ready = true;\s+active = pageLoaded;/);
@@ -89,8 +89,9 @@ test("an early poll replaces the scheduled one instead of starting a second chai
 
 test("capture notices are tracked, so resume replaces them instead of resending them", () => {
   for (const text of ["Hey dots 감지됨", "음성 전사 마무리 중", "녹음 중 · 손을 떼면"]) {
-    assert.match(main, new RegExp(`captureText\\("${text}`), text);
-    assert.doesNotMatch(main, new RegExp(`displayText\\("${text}`), text);
+    // Each notice is written as () => t(English, Korean); the Korean form identifies it.
+    assert.match(main, new RegExp(`captureText\\(\\s*\\(\\) =>\\s*t\\(\\s*"[^"]*",\\s*"${text}`), text);
+    assert.doesNotMatch(main, new RegExp(`displayText\\(\\s*(\\(\\) =>\\s*)?t\\(\\s*"[^"]*",\\s*"${text}`), text);
   }
   const resume = body("resume");
   assert.match(resume, /if \(selection === captureNotice\) \{\s+if \(history\.selected\) showSelectedReply\(\);/);

@@ -8,6 +8,7 @@ import ts from "../even-app/node_modules/typescript/lib/typescript.js";
 const KEY = "synthetic-soniox-key-0001";
 const DEVICE = JSON.stringify({ origin: "https://fixture.example", token: "synthetic-device-token" });
 const PREFS = "dot-cloud-preferences-v1";
+const LANGUAGE = "dot-cloud-language-v1";
 const EVENT = {
   SCROLL_TOP: 1,
   DOUBLE_CLICK: 3,
@@ -55,7 +56,10 @@ async function boot(options = {}) {
   const timers = new Map();
   let timerId = 0;
   const h = {
-    storage: new Map(Object.entries(options.storage ?? {})),
+    // `language` is the saved choice a scenario starts with; without one the page starts in English.
+    storage: new Map(
+      Object.entries({ ...options.storage, ...(options.language ? { [LANGUAGE]: options.language } : {}) }),
+    ),
     held: new Map(),
     readFail: new Set(options.readFail ?? []),
     writeFail: false,
@@ -70,6 +74,7 @@ async function boot(options = {}) {
     posts: [],
     listeners,
     timers,
+    elements,
   };
   h.get = (id) => {
     if (!elements.has(id))
@@ -102,7 +107,7 @@ async function boot(options = {}) {
   h.get("origin").value = "https://hey-dots-g2.keenranger.chatgpt.site";
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { clipboard: { writeText: options.copy ?? (async () => {}) } },
+    value: { language: options.locale ?? "en-US", clipboard: { writeText: options.copy ?? (async () => {}) } },
   });
   // index.html ships both voice preferences checked.
   h.get("wake-enabled").checked = true;
@@ -150,7 +155,12 @@ async function boot(options = {}) {
       return true;
     },
   };
-  globalThis.document = { hidden: false, getElementById: h.get, addEventListener: (n, c) => listeners.set(n, c) };
+  globalThis.document = {
+    hidden: false,
+    documentElement: { lang: "en" },
+    getElementById: h.get,
+    addEventListener: (n, c) => listeners.set(n, c),
+  };
   globalThis.window = { addEventListener: (n, c) => listeners.set(n, c) };
   globalThis.__runtimeBridge = host;
   globalThis.fetch =
@@ -258,7 +268,9 @@ async function boot(options = {}) {
     source = source.replace('import "./style.css";', "");
     source = source.replace(
       /from "(\.\/[^"]+)"/g,
-      (_, path) => `from "${new URL("../even-app/src/" + path.slice(2), import.meta.url).href}"`,
+      // The selected language is module state, so each boot gets its own locale instance.
+      (_, path) =>
+        `from "${new URL("../even-app/src/" + path.slice(2), import.meta.url).href}${path === "./locale.ts" ? `?boot=${boots + 1}` : ""}"`,
     );
     // Each boot is a separate module instance with its own state.
     await import(moduleUrl(`${source}\n// boot ${++boots}`));
@@ -287,6 +299,7 @@ test("same-message display recovery, locked-phone polling, G2 foreground pause, 
   let failBody = true;
   let failHeader = true;
   const h = await boot({
+    language: "ko",
     holdStartup: true,
     storage: { "dot-cloud-device-v1": DEVICE },
     messages: [{ message_id: "fixture-reply", text: "안경 답변 확인", createdAt: "2026-10-23T00:00:00Z" }],
@@ -367,6 +380,7 @@ test("same-message display recovery, locked-phone polling, G2 foreground pause, 
 
 test("a saved OFF is restored before any microphone opens, and explicit choices persist through SDK storage", async () => {
   const h = await boot({
+    language: "ko",
     storage: { ...ready, [PREFS]: JSON.stringify({ wake: false, autoSend: false }) },
     hold: [PREFS],
   });
@@ -414,7 +428,7 @@ test("a saved OFF is restored before any microphone opens, and explicit choices 
 });
 
 test("defaults apply only without a saved choice, and an unreadable choice keeps Hey dots off", async () => {
-  const fresh = await boot({ storage: ready });
+  const fresh = await boot({ language: "ko", storage: ready });
   try {
     assert.equal(fresh.get("wake-enabled").checked, true);
     assert.equal(fresh.get("auto-send").checked, true);
@@ -423,7 +437,7 @@ test("defaults apply only without a saved choice, and an unreadable choice keeps
   } finally {
     fresh.restore();
   }
-  const unreadable = await boot({ storage: ready, readFail: [PREFS] });
+  const unreadable = await boot({ language: "ko", storage: ready, readFail: [PREFS] });
   try {
     assert.equal(unreadable.opens(), 0, "an unknown saved choice may be OFF, so the microphone stays closed");
     assert.equal(unreadable.get("wake-enabled").checked, false);
@@ -435,7 +449,7 @@ test("defaults apply only without a saved choice, and an unreadable choice keeps
 });
 
 test("an unconfirmed G2 microphone stop is retried before any reopen, on resume and on a manual start", async () => {
-  const h = await boot({ storage: ready });
+  const h = await boot({ language: "ko", storage: ready });
   try {
     assert.equal(h.opens(), 1);
     h.audioResults.push(false);
@@ -481,7 +495,7 @@ test("an unconfirmed G2 microphone stop is retried before any reopen, on resume 
 });
 
 test("quiet for more than 20 seconds is only reported; later G2 frames, a cue and manual speech are still accepted", async () => {
-  const h = await boot({ storage: ready });
+  const h = await boot({ language: "ko", storage: ready });
   try {
     assert.equal(h.opens(), 1);
     // The SDK acknowledgement means the request was accepted, not that audio arrives.
@@ -549,7 +563,7 @@ test("quiet for more than 20 seconds is only reported; later G2 frames, a cue an
 });
 
 test("a manual capture with no G2 frames runs to its 30-second cap and says no audio arrived, not malformed audio", async () => {
-  const h = await boot({ storage: ready });
+  const h = await boot({ language: "ko", storage: ready });
   try {
     await h.event(EVENT.LONG_PRESS, "textEvent");
     assert.match(h.get("status").textContent, /녹음 중/);
@@ -594,7 +608,7 @@ test("a confirmed host exit while waiting for G2 audio closes the microphone and
 });
 
 test("an abnormal host exit closes the microphone and Soniox, stops polling, says why and never resumes", async () => {
-  const h = await boot({ storage: ready });
+  const h = await boot({ language: "ko", storage: ready });
   try {
     await h.frame();
     h.detectors.at(-1).event({ type: "wake" });
@@ -621,6 +635,7 @@ test("an abnormal host exit closes the microphone and Soniox, stops polling, say
 test("a send in flight across a G2 foreground exit keeps the typed text, and resume respects the draft", async () => {
   const pending = [];
   const h = await boot({
+    language: "ko",
     storage: ready,
     fetch: (_url, init) => {
       if (init?.method !== "POST")
@@ -671,7 +686,7 @@ const headerWrites = (h) => h.writes.filter((w) => w.containerID === 2).map((w) 
 
 test("an owner deletion clears old replies on the phone and G2, keeps the draft, rejects older snapshots and shows new replies", async () => {
   const server = { revision: 3, messages: [msg("old-1", "삭제 전 답변 하나"), msg("old-2", "삭제 전 답변 둘")] };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     assert.equal(h.get("reply").textContent, "삭제 전 답변 둘");
     assert.equal(bodyWrites(h).at(-1), "삭제 전 답변 둘");
@@ -736,7 +751,7 @@ test("a submission in flight across a deletion neither redisplays old history no
     messages: [msg("old-1", "삭제될 답변")],
     post: () => new Promise((resolve) => (settle = resolve)),
   };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     h.get("text").value = "삭제 직전 질문";
     h.get("text").oninput();
@@ -771,7 +786,7 @@ test("a 410 for a deleted utterance ID is said plainly, never replayed, and a de
     messages: [],
     post: () => Promise.resolve(Response.json({ error: "Utterance was deleted" }, { status: 410 })),
   };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     h.get("text").value = "지워진 질문";
     h.get("text").oninput();
@@ -826,6 +841,7 @@ test("replies past the relay retention cutoff leave the phone and G2, and an old
   };
   const fetch = relay(server);
   const h = await boot({
+    language: "ko",
     storage: ready,
     fetch: async (url, init) => {
       const response = await fetch(url, init);
@@ -880,6 +896,7 @@ test("when the only reply on screen expires, the phone and G2 say so instead of 
   let retention = "2026-09-24T00:00:00.000Z";
   const fetch = relay(server);
   const h = await boot({
+    language: "ko",
     storage: ready,
     fetch: async (url, init) =>
       Response.json({ ...(await (await fetch(url, init)).json()), retention_cutoff: retention }),
@@ -905,6 +922,7 @@ test("a reply expiring while G2 shows a waiting notice leaves the phone, and the
   let retention = "2026-09-24T00:00:00.000Z";
   const fetch = relay(server);
   const h = await boot({
+    language: "ko",
     storage: ready,
     fetch: async (url, init) => {
       const response = await fetch(url, init);
@@ -955,6 +973,7 @@ test("expiry alone is not a reply: a waiting notice stays on G2 while the phone 
   let retention = day(1);
   const fetch = relay(server);
   const h = await boot({
+    language: "ko",
     storage: ready,
     fetch: async (url, init) => {
       const response = await fetch(url, init);
@@ -1001,6 +1020,7 @@ test("a reply expiring during a capture moves the phone to a kept reply while th
   let retention = day(1);
   const fetch = relay(server);
   const h = await boot({
+    language: "ko",
     storage: ready,
     fetch: async (url, init) => {
       const response = await fetch(url, init);
@@ -1033,7 +1053,7 @@ test("a reply expiring during a capture moves the phone to a kept reply while th
 
 test("replies cached from a legacy relay are cleared when the upgraded relay first reports a deletion", async () => {
   const server = { messages: [msg("legacy-1", "업그레이드 전 답변")] };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     assert.equal(h.get("reply").textContent, "업그레이드 전 답변");
     h.get("text").value = "업그레이드 후에도 남을 초안";
@@ -1058,7 +1078,7 @@ test("replies cached from a legacy relay are cleared when the upgraded relay fir
 
 test("a first revision of zero keeps replies cached from a legacy relay", async () => {
   const server = { messages: [msg("legacy-1", "업그레이드 전 답변")] };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     server.revision = 0;
     server.messages = [msg("legacy-1", "업그레이드 전 답변"), msg("new-1", "업그레이드 후 답변")];
@@ -1073,7 +1093,7 @@ test("a first revision of zero keeps replies cached from a legacy relay", async 
 
 test("after a deletion, a response with a missing or invalid revision never brings old replies back", async () => {
   const server = { revision: 1, messages: [msg("old-1", "삭제 전 답변")] };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     server.revision = 2;
     server.messages = [];
@@ -1102,7 +1122,7 @@ test("a submission in flight when the upgraded relay first reports a deletion cl
   for (const messages of [[msg("legacy-1", "업그레이드 전 답변")], []]) {
     let settle;
     const server = { messages, post: () => new Promise((resolve) => (settle = resolve)) };
-    const h = await boot({ storage: ready, fetch: relay(server) });
+    const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
     try {
       h.get("text").value = "업그레이드 중 질문";
       h.get("text").oninput();
@@ -1128,7 +1148,7 @@ test("a submission in flight when the upgraded relay first reports a deletion cl
 
 test("a relay that never reports a revision keeps the append-only behavior", async () => {
   const server = { messages: [msg("a", "첫 답변")], post: undefined };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     server.messages = [msg("b", "둘째 답변")];
     await h.fire(2500);
@@ -1176,6 +1196,7 @@ test("manual hold shows Soniox running text on G2 as unconfirmed, paced by ackno
   const held = [];
   let hold = false;
   const h = await boot({
+    language: "ko",
     storage: ready,
     write: (update) => (hold && update.containerID === 1 ? new Promise((resolve) => held.push(resolve)) : true),
   });
@@ -1229,7 +1250,7 @@ test("manual hold shows Soniox running text on G2 as unconfirmed, paced by ackno
 
 test("a reply arriving during Hey dots speech waits behind the running text and is shown once the capture is submitted", async () => {
   const messages = [];
-  const h = await boot({ storage: ready, messages });
+  const h = await boot({ language: "ko", storage: ready, messages });
   try {
     await h.frame();
     const detector = h.detectors.at(-1);
@@ -1266,6 +1287,7 @@ test("a reply arriving during Hey dots speech waits behind the running text and 
 
 test("moving to a message ends the G2 running text, and finishing does not bring it back", async () => {
   const h = await boot({
+    language: "ko",
     storage: ready,
     messages: [
       { message_id: "a", text: "첫 답변", createdAt: "2026-10-24T00:00:00Z" },
@@ -1305,7 +1327,7 @@ test("moving to a message ends the G2 running text, and finishing does not bring
 
 test("late running text after a pause, a new cue, Hey dots off or a host exit never reaches G2", async () => {
   const late = (handler, text) => handler({ data: JSON.stringify({ tokens: [{ text, is_final: false }] }) });
-  const paused = await boot({ storage: ready });
+  const paused = await boot({ language: "ko", storage: ready });
   try {
     await paused.event(EVENT.LONG_PRESS, "textEvent");
     await paused.frame();
@@ -1329,7 +1351,7 @@ test("late running text after a pause, a new cue, Hey dots off or a host exit ne
   } finally {
     paused.restore();
   }
-  const recue = await boot({ storage: ready });
+  const recue = await boot({ language: "ko", storage: ready });
   try {
     await recue.frame();
     const detector = recue.detectors.at(-1);
@@ -1350,7 +1372,7 @@ test("late running text after a pause, a new cue, Hey dots off or a host exit ne
   } finally {
     recue.restore();
   }
-  const off = await boot({ storage: ready });
+  const off = await boot({ language: "ko", storage: ready });
   try {
     await off.frame();
     const detector = off.detectors.at(-1);
@@ -1376,7 +1398,7 @@ test("late running text after a pause, a new cue, Hey dots off or a host exit ne
   } finally {
     off.restore();
   }
-  const exited = await boot({ storage: ready });
+  const exited = await boot({ language: "ko", storage: ready });
   try {
     await exited.event(EVENT.LONG_PRESS, "textEvent");
     await exited.frame();
@@ -1392,7 +1414,7 @@ test("late running text after a pause, a new cue, Hey dots off or a host exit ne
 });
 
 test("long Korean running text is shown whole up to the update limit, then keeps its newest part", async () => {
-  const h = await boot({ storage: ready });
+  const h = await boot({ language: "ko", storage: ready });
   try {
     await h.event(EVENT.LONG_PRESS, "textEvent");
     await h.frame();
@@ -1439,7 +1461,7 @@ const turnOffWake = async (h) => {
 
 test("a single reply deferred behind Hey dots running text comes back when Hey dots is turned off", async () => {
   const messages = [];
-  const h = await boot({ storage: ready, messages });
+  const h = await boot({ language: "ko", storage: ready, messages });
   try {
     const { socket } = await wakeCapture(h);
     messages.push({ message_id: "only", text: "하나뿐인 답변", createdAt: "2026-10-24T00:00:00Z" });
@@ -1469,6 +1491,7 @@ test("a single reply deferred behind Hey dots running text comes back when Hey d
 
 test("cancelling a capture with no new reply says it stopped; a cue with nothing heard yet does too", async () => {
   const h = await boot({
+    language: "ko",
     storage: ready,
     messages: [{ message_id: "old", text: "예전 답변", createdAt: "2026-10-24T00:00:00Z" }],
   });
@@ -1481,7 +1504,7 @@ test("cancelling a capture with no new reply says it stopped; a cue with nothing
   } finally {
     h.restore();
   }
-  const quiet = await boot({ storage: ready });
+  const quiet = await boot({ language: "ko", storage: ready });
   try {
     await quiet.frame();
     quiet.detectors.at(-1).event({ type: "wake" });
@@ -1496,7 +1519,7 @@ test("cancelling a capture with no new reply says it stopped; a cue with nothing
 
 test("a deferred reply does not take back a message the user moved to, and survives a late acknowledgement", async () => {
   const messages = [{ message_id: "a", text: "첫 답변", createdAt: "2026-10-24T00:00:00Z" }];
-  const moved = await boot({ storage: ready, messages });
+  const moved = await boot({ language: "ko", storage: ready, messages });
   try {
     await moved.flush();
     await wakeCapture(moved);
@@ -1515,6 +1538,7 @@ test("a deferred reply does not take back a message the user moved to, and survi
   let hold = false;
   const replies = [];
   const late = await boot({
+    language: "ko",
     storage: ready,
     messages: replies,
     write: (update) => (hold && update.containerID === 1 ? new Promise((resolve) => held.push(resolve)) : true),
@@ -1537,7 +1561,7 @@ test("a deferred reply does not take back a message the user moved to, and survi
     late.restore();
   }
   const finishing = [];
-  const off = await boot({ storage: ready, messages: finishing });
+  const off = await boot({ language: "ko", storage: ready, messages: finishing });
   try {
     const { detector } = await wakeCapture(off);
     finishing.push({ message_id: "f", text: "마무리 중 온 답변", createdAt: "2026-10-24T00:00:00Z" });
@@ -1559,6 +1583,7 @@ test("reply polls during a slow running-text acknowledgement keep the display st
   let hold = false;
   let fail = false;
   const h = await boot({
+    language: "ko",
     storage: ready,
     write: (update) => (update.containerID !== 1 ? true : hold ? new Promise((resolve) => held.push(resolve)) : !fail),
   });
@@ -1600,6 +1625,7 @@ test("reply polls during a slow running-text acknowledgement keep the display st
 test("an automatic submission whose response is lost or times out says storage is unconfirmed, never not sent, and is not replayed", async () => {
   for (const lost of ["network", "timeout"]) {
     const h = await boot({
+      language: "ko",
       storage: ready,
       fetch: (_url, init) => {
         if (init?.method !== "POST")
@@ -1639,7 +1665,11 @@ test("an automatic submission whose response is lost or times out says storage i
 
 test("with auto-send off, a single reply deferred during a capture reaches G2 on release while the phone keeps the draft", async () => {
   const messages = [];
-  const h = await boot({ storage: { ...ready, [PREFS]: JSON.stringify({ wake: false, autoSend: false }) }, messages });
+  const h = await boot({
+    language: "ko",
+    storage: { ...ready, [PREFS]: JSON.stringify({ wake: false, autoSend: false }) },
+    messages,
+  });
   try {
     await h.flush();
     assert.equal(h.get("auto-send").checked, false);
@@ -1710,7 +1740,7 @@ const STOPPED = /전송하지 않았습니다/;
 
 test("an owner deletion during running text keeps the caption, and the submission is shown as sent, not stopped", async () => {
   const server = { revision: 1, messages: [msg("old", "삭제될 답변")] };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     const socket = await manualCapture(h);
     const audio = h.audio.length;
@@ -1746,7 +1776,7 @@ test("an owner deletion during running text keeps the caption, and the submissio
 
 test("a reply written after a deletion during running text is deferred on G2 and shown on submission", async () => {
   const server = { revision: 1, messages: [msg("old", "삭제될 답변")] };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     const socket = await manualCapture(h);
     server.revision = 2;
@@ -1773,7 +1803,7 @@ test("expiry during running text is not a reply: submission, review and cancel n
   {
     const server = start();
     let cutoff = day(1);
-    const h = await boot({ storage: ready, fetch: retained(server, () => cutoff) });
+    const h = await boot({ language: "ko", storage: ready, fetch: retained(server, () => cutoff) });
     try {
       assert.equal(h.get("reply").textContent, "남을 답변");
       const socket = await manualCapture(h);
@@ -1795,6 +1825,7 @@ test("expiry during running text is not a reply: submission, review and cancel n
     const server = start();
     let cutoff = day(1);
     const h = await boot({
+      language: "ko",
       storage: { ...ready, [PREFS]: JSON.stringify({ wake: false, autoSend: false }) },
       fetch: retained(server, () => cutoff),
     });
@@ -1816,7 +1847,7 @@ test("expiry during running text is not a reply: submission, review and cancel n
   {
     const server = start();
     let cutoff = day(1);
-    const h = await boot({ storage: ready, fetch: retained(server, () => cutoff) });
+    const h = await boot({ language: "ko", storage: ready, fetch: retained(server, () => cutoff) });
     try {
       await wakeCapture(h);
       cutoff = day(3);
@@ -1834,7 +1865,7 @@ test("expiry during running text is not a reply: submission, review and cancel n
 test("after a known revision, a legacy or malformed response during running text defers nothing to G2", async () => {
   for (const bad of [undefined, "2", -1, 1.5]) {
     const server = { revision: 1, messages: [msg("old", "알던 답변")] };
-    const h = await boot({ storage: ready, fetch: relay(server) });
+    const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
     try {
       const socket = await manualCapture(h);
       server.revision = bad;
@@ -1859,7 +1890,7 @@ test("an automatic POST answered after a deletion neither says not sent nor leav
     messages: [msg("old", "삭제될 답변")],
     post: () => new Promise((resolve) => (settle = resolve)),
   };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     const socket = await manualCapture(h);
     await release(h, socket);
@@ -1890,7 +1921,7 @@ test("a reply written with a deletion during an automatic POST reaches G2 once t
     messages: [msg("old", "삭제될 답변")],
     post: () => new Promise((resolve) => (settle = resolve)),
   };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     const socket = await manualCapture(h);
     await release(h, socket);
@@ -1928,7 +1959,7 @@ test("an automatic POST refused with 410 says so on G2, keeps the transcript and
     messages: [],
     post: () => Promise.resolve(Response.json({ error: "Utterance was deleted" }, { status: 410 })),
   };
-  const h = await boot({ storage: ready, fetch: relay(server) });
+  const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
   try {
     const socket = await manualCapture(h);
     await release(h, socket);
@@ -1953,7 +1984,7 @@ test("a deferred reply survives review mode, cancel and an unknown outcome, but 
   // Review mode: the reply deferred during capture takes G2; a deletion afterwards clears it and Send shows as sent.
   {
     const server = { revision: 1, messages: [] };
-    const h = await boot({ storage: off, fetch: relay(server) });
+    const h = await boot({ language: "ko", storage: off, fetch: relay(server) });
     try {
       await h.flush();
       const socket = await manualCapture(h);
@@ -1976,7 +2007,7 @@ test("a deferred reply survives review mode, cancel and an unknown outcome, but 
   // Review mode: a deferred reply deleted before release does not come back; G2 shows the review prompt.
   {
     const server = { revision: 1, messages: [] };
-    const h = await boot({ storage: off, fetch: relay(server) });
+    const h = await boot({ language: "ko", storage: off, fetch: relay(server) });
     try {
       await h.flush();
       const socket = await manualCapture(h);
@@ -1996,7 +2027,7 @@ test("a deferred reply survives review mode, cancel and an unknown outcome, but 
   // Cancel: a deferred reply deleted before Hey dots is turned off leaves "stopped", not an empty or old body.
   {
     const server = { revision: 1, messages: [] };
-    const h = await boot({ storage: ready, fetch: relay(server) });
+    const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
     try {
       await wakeCapture(h);
       server.messages = [msg("gone", "곧 삭제될 답변")];
@@ -2013,7 +2044,7 @@ test("a deferred reply survives review mode, cancel and an unknown outcome, but 
   // Unknown outcome: the deferred reply takes G2, the phone keeps the unconfirmed-storage status, no replay.
   {
     const server = { revision: 1, messages: [], post: () => Promise.reject(new TypeError("Failed to fetch")) };
-    const h = await boot({ storage: ready, fetch: relay(server) });
+    const h = await boot({ language: "ko", storage: ready, fetch: relay(server) });
     try {
       const socket = await manualCapture(h);
       server.messages = [msg("only", "하나뿐인 답변")];
@@ -2034,7 +2065,7 @@ test("a deferred reply survives review mode, cancel and an unknown outcome, but 
 test("dashboard follows validated custom origins and blocks unsafe destinations", async () => {
   const h = await boot({ storage: { "dot-cloud-device-v1": DEVICE } });
   try {
-    assert.equal(h.get("dashboard-link").href, "https://fixture.example");
+    assert.equal(h.get("dashboard-link").href, "https://fixture.example/?lang=en");
     for (const value of [
       "javascript:alert(1)",
       "http://example.com",
@@ -2058,7 +2089,12 @@ test("dashboard follows validated custom origins and blocks unsafe destinations"
     }
     h.get("origin").value = " https://custom.example:8443/ ";
     h.get("origin").oninput();
-    assert.equal(h.get("dashboard-link").href, "https://custom.example:8443");
+    assert.equal(h.get("dashboard-link").href, "https://custom.example:8443/?lang=en");
+    // The link carries the chosen language; the address shown and copied stays the origin.
+    h.get("language-ko").onchange();
+    await h.flush();
+    assert.equal(h.get("dashboard-link").href, "https://custom.example:8443/?lang=ko");
+    assert.equal(h.get("dashboard-address").value, "https://custom.example:8443");
     assert.equal(h.get("dashboard-address").value, "https://custom.example:8443");
   } finally {
     h.restore();
@@ -2069,6 +2105,7 @@ test("dashboard copy deduplicates clicks, handles failure, and ignores stale fee
   let finish;
   const copies = [];
   const h = await boot({
+    language: "ko",
     copy: (value) => {
       copies.push(value);
       return new Promise((resolve, reject) => {
@@ -2097,6 +2134,260 @@ test("dashboard copy deduplicates clicks, handles failure, and ignores stale fee
     await third;
     assert.match(h.get("dashboard-status").textContent, /복사했습니다/);
     assert.equal(copies.at(-1), "https://changed.example");
+  } finally {
+    h.restore();
+  }
+});
+
+const HANGUL = /[\u3131-\u318e\uac00-\ud7a3]/;
+/** Every phone text the runtime wrote, and every G2 write, by where it went. */
+const shownText = (h) => [
+  ...[...h.elements].map(([id, element]) => [id, element.textContent]),
+  ...h.writes.map((write) => [`g2:${write.containerName}`, write.content]),
+];
+
+test("English is the default, even on a Korean phone, across phone statuses and G2", async () => {
+  const h = await boot({ storage: ready, locale: "ko-KR" });
+  try {
+    await h.fire(2500);
+    assert.equal(document.documentElement.lang, "en");
+    assert.match(h.get("status").textContent, /saved server connection/);
+    assert.match(h.get("message-position").textContent, /No messages yet/);
+    for (const [where, text] of shownText(h)) assert.ok(!HANGUL.test(text), `${where} is English: ${text}`);
+    assert.ok(!h.storage.has(LANGUAGE), "nothing is saved until the user chooses");
+  } finally {
+    h.restore();
+  }
+});
+
+test("the language switch applies at once, rewrites the G2 header and is remembered", async () => {
+  const h = await boot({ storage: ready });
+  try {
+    const header = () => h.writes.filter((w) => w.containerID === 2).at(-1)?.content;
+    assert.ok(!HANGUL.test(header()));
+    h.get("language-ko").onchange();
+    await h.flush();
+    assert.equal(document.documentElement.lang, "ko");
+    assert.equal(h.get("send").textContent, "Dot에 전송");
+    assert.equal(h.get("soniox-console-text").textContent, "Soniox API 키 받기");
+    assert.match(h.get("status").textContent, /한국어/);
+    assert.ok(HANGUL.test(h.get("wake-status").textContent));
+    assert.ok(HANGUL.test(header()), "G2 header follows the choice");
+    assert.deepEqual(h.storageWrites.at(-1), [LANGUAGE, "ko"]);
+    h.get("language-en").onchange();
+    await h.flush();
+    assert.equal(h.get("send").textContent, "Send to Dot");
+    assert.ok(!HANGUL.test(h.get("wake-status").textContent));
+    assert.deepEqual(h.storageWrites.at(-1), [LANGUAGE, "en"]);
+    assert.equal(h.get("language-en").checked, true);
+  } finally {
+    h.restore();
+  }
+  const again = await boot({ storage: { ...ready, [LANGUAGE]: "ko" } });
+  try {
+    assert.equal(again.get("language-ko").checked, true);
+    assert.equal(again.get("record").textContent, "녹음 시작");
+  } finally {
+    again.restore();
+  }
+});
+
+test("an unreadable or late saved language never overrides English or a fresh choice", async () => {
+  const unreadable = await boot({ storage: ready, language: "ko", readFail: [LANGUAGE] });
+  try {
+    for (const [where, text] of shownText(unreadable)) assert.ok(!HANGUL.test(text), `${where}: ${text}`);
+  } finally {
+    unreadable.restore();
+  }
+  const late = await boot({ storage: ready, language: "ko", hold: [LANGUAGE] });
+  try {
+    late.get("language-en").onchange();
+    await late.release(LANGUAGE);
+    assert.equal(document.documentElement.lang, "en");
+    for (const [where, text] of shownText(late)) assert.ok(!HANGUL.test(text), `${where}: ${text}`);
+  } finally {
+    late.restore();
+  }
+  const unsaved = await boot({ storage: ready });
+  try {
+    unsaved.writeFail = true;
+    unsaved.get("language-ko").onchange();
+    await unsaved.flush();
+    assert.match(unsaved.get("status").textContent, /언어 선택을 저장하지 못했습니다/);
+  } finally {
+    unsaved.restore();
+  }
+});
+
+test("helper-module errors read in English by default", async () => {
+  const h = await boot({ storage: { [PREFS]: "" } });
+  try {
+    h.get("code").value = "not-a-key";
+    h.get("pair").onsubmit({ preventDefault() {} });
+    assert.match(h.get("pair-status").textContent, /^Paste the whole 64-character connection key/);
+    assert.equal(h.get("code").attributes.get("aria-invalid"), "true");
+  } finally {
+    h.restore();
+  }
+});
+
+test("switching language keeps the draft, the key being typed, a session-only key, the connection and the microphone", async () => {
+  const h = await boot({ storage: { [PREFS]: "", "dot-cloud-device-v1": DEVICE } });
+  try {
+    h.get("soniox-key").value = KEY;
+    h.get("soniox-remember").checked = false;
+    h.get("soniox").onsubmit({ preventDefault() {} });
+    await h.flush();
+    assert.match(h.get("soniox-status").textContent, /kept only until you close the app/);
+    assert.equal(h.opens(), 1, "Hey dots opened the microphone with the session-only key");
+    h.get("text").value = "draft in progress";
+    h.get("soniox-key").value = "partly typed replacement";
+    const writes = h.storageWrites.length;
+    const audio = h.audio.length;
+    const polls = h.polls;
+    h.get("language-ko").onchange();
+    await h.flush();
+    h.get("language-en").onchange();
+    await h.flush();
+    assert.equal(h.get("text").value, "draft in progress");
+    assert.equal(h.get("soniox-key").value, "partly typed replacement");
+    assert.match(h.get("soniox-status").textContent, /kept only until you close the app/);
+    assert.equal(h.get("disconnect").hidden, false, "still connected");
+    assert.equal(h.audio.length, audio, "the microphone is neither closed nor reopened");
+    assert.deepEqual(
+      h.storageWrites.slice(writes).map(([key]) => key),
+      [LANGUAGE, LANGUAGE],
+      "only the language choice is saved",
+    );
+    await h.fire(2500);
+    assert.equal(h.polls, polls + 1, "reply polling continues");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a long reply is split with markers in the selected language and still fits after a switch", async () => {
+  const text = "word ".repeat(900);
+  const h = await boot({
+    storage: ready,
+    messages: [{ message_id: "long-reply", text, createdAt: "2026-10-23T00:00:00Z" }],
+  });
+  try {
+    await h.fire(2500);
+    const body = () => h.writes.filter((w) => w.containerID === 1).at(-1).content;
+    assert.match(body(), /\n\(continues\)$/);
+    assert.ok(!HANGUL.test(body()));
+    assert.equal(h.get("next").hidden, false);
+    h.get("next").onclick();
+    await h.flush();
+    assert.match(body(), /^\(continued\)\n/);
+    h.get("language-ko").onchange();
+    await h.flush();
+    assert.match(body(), /^\(이어서\)\n/, "the part being read is rewritten in Korean");
+    assert.ok(body().length <= 2000);
+    h.get("language-en").onchange();
+    await h.flush();
+    assert.match(body(), /^\(continued\)\n/);
+    assert.ok(body().length <= 2000);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a switch rewrites the app's own notices in place but never a Dot reply, even one matching a placeholder", async () => {
+  const h = await boot({
+    storage: ready,
+    messages: [{ message_id: "echo", text: "Waiting for a reply.", createdAt: "2026-10-23T00:00:00Z" }],
+  });
+  const body = () => h.writes.filter((w) => w.containerID === 1).at(-1).content;
+  try {
+    await h.fire(2500);
+    assert.equal(h.get("reply").textContent, "Waiting for a reply.");
+    h.get("language-ko").onchange();
+    await h.flush();
+    assert.equal(h.get("reply").textContent, "Waiting for a reply.", "Dot's words are never translated");
+    assert.equal(body(), "Waiting for a reply.");
+    // A G2 notice and the phone's system reply text follow the language.
+    h.get("disconnect").onclick();
+    await h.flush();
+    assert.equal(h.get("reply").textContent, "연결을 해제했습니다.");
+    h.get("language-en").onchange();
+    await h.flush();
+    assert.equal(h.get("reply").textContent, "Disconnected.");
+    assert.equal(body(), "Disconnected.");
+    // The pairing result next to the form follows too.
+    h.get("code").value = "not-a-key";
+    h.get("pair").onsubmit({ preventDefault() {} });
+    assert.match(h.get("pair-status").textContent, /^Paste the whole 64-character/);
+    h.get("language-ko").onchange();
+    await h.flush();
+    assert.match(h.get("pair-status").textContent, /^연결 키는 서버 대시보드에 표시된/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a capture notice on G2 is rewritten in the new language while the capture continues", async () => {
+  const h = await boot({ storage: ready });
+  const body = () => h.writes.filter((w) => w.containerID === 1).at(-1).content;
+  try {
+    await h.event(EVENT.LONG_PRESS);
+    assert.match(body(), /^Recording · let go/);
+    const opens = h.opens();
+    h.get("language-ko").onchange();
+    await h.flush();
+    assert.match(body(), /^녹음 중 · 손을 떼면/);
+    assert.equal(h.opens(), opens, "the capture keeps its microphone");
+    assert.equal(h.get("stop").disabled, false, "the capture is still running");
+  } finally {
+    h.restore();
+  }
+});
+
+test("failed pairing feedback follows the chosen language for HTTP, network and timeout failures", async () => {
+  for (const failure of [401, 500, "network", "timeout"]) {
+    const h = await boot({
+      fetch: async (_url, init) => {
+        if (failure === "network") throw new TypeError("synthetic network failure");
+        if (failure === "timeout")
+          return new Promise((_, reject) => {
+            init.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+          });
+        return new Response("{}", { status: failure });
+      },
+    });
+    try {
+      h.get("code").value = "a".repeat(64);
+      h.get("pair").onsubmit({ preventDefault() {} });
+      if (failure === "timeout") await h.fire(15000);
+      await h.flush();
+      assert.match(h.get("pair-status").textContent, /key|server/, `English failure: ${failure}`);
+      h.get("language-ko").onchange();
+      await h.flush();
+      assert.ok(HANGUL.test(h.get("pair-status").textContent), `Korean failure: ${failure}`);
+      h.get("language-en").onchange();
+      await h.flush();
+      assert.ok(!HANGUL.test(h.get("pair-status").textContent), `English again: ${failure}`);
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("a visible phone partial changes only its label when the language changes", async () => {
+  const h = await boot({ storage: ready });
+  try {
+    await h.event(EVENT.LONG_PRESS);
+    await h.frame();
+    partial(h.sockets.at(-1), ["original user words"]);
+    await h.flush();
+    assert.equal(h.get("partial").textContent, "Live transcript (not final): original user words");
+    h.get("language-ko").onchange();
+    await h.flush();
+    assert.equal(h.get("partial").textContent, "실시간 인식 (미확정): original user words");
+    h.get("language-en").onchange();
+    await h.flush();
+    assert.equal(h.get("partial").textContent, "Live transcript (not final): original user words");
   } finally {
     h.restore();
   }

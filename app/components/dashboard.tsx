@@ -10,15 +10,8 @@ import {
   forgetLegacyPairing,
   revealPairing,
 } from "@/lib/pairing-session";
+import { type Copy, type DeliveryCategory, type Locale, copy as copies } from "@/app/i18n/dashboard";
 
-type DeliveryCategory =
-  | "accepted"
-  | "http_4xx"
-  | "http_5xx"
-  | "http_other"
-  | "timeout"
-  | "network"
-  | "invalid_response";
 type Status = {
   deviceCount: number;
   subscribed: boolean;
@@ -33,15 +26,6 @@ type Status = {
     last: { category: DeliveryCategory; httpStatus: number | null; at: string } | null;
   };
 };
-const deliveryLabels: Record<DeliveryCategory, string> = {
-  accepted: "Dot 이벤트 주소가 수신함",
-  http_4xx: "Dot 이벤트 주소가 거절함",
-  http_5xx: "Dot 이벤트 주소 오류",
-  http_other: "예상하지 못한 응답",
-  timeout: "응답 시간 초과",
-  network: "네트워크 오류",
-  invalid_response: "잘못된 응답",
-};
 const sonioxKeyGuide = "https://soniox.com/docs/guides/api-key-permissions";
 // Only to remove the earlier dashboard's tab cache of a pairing code; nothing is written to it.
 function tabStorage() {
@@ -53,25 +37,13 @@ function tabStorage() {
 }
 // "unavailable": the server state could not be checked, so no key is shown and none can be replaced by mistake.
 type PairingState = ActivePairing | "unavailable" | undefined;
-const copied = "복사했습니다.";
-const copyUnavailable = "자동 복사를 사용할 수 없습니다. 표시된 내용을 직접 선택해 복사해 주세요.";
-const createdNotice =
-  "새 연결 키를 만들었습니다. 이전 키로는 이제 새 기기를 연결할 수 없고, 이미 연결된 기기는 그대로입니다. 키 확인을 눌러 Even Hub 앱에 입력해 주세요.";
-const withdrawnNotice = "연결 키를 폐기했습니다. 이제 새 기기를 연결할 수 없고, 이미 연결된 기기는 그대로입니다.";
-const sessionExpired = "로그인 세션이 만료되었습니다. 다시 로그인해 주세요.";
-const keyNotices = [copied, copyUnavailable, createdNotice, "연결 키를 표시했습니다."];
-function pairingFailure(status: number, action: "create" | "reveal" | "withdraw") {
-  if (status === 401) return sessionExpired;
-  if (status === 429) return "요청이 많아 잠시 막혔습니다. 1분 뒤 다시 시도해 주세요.";
-  if (status === 503 && action !== "withdraw")
-    return "서버의 연결 키 보호 설정이 준비되지 않아 지금은 키를 만들거나 보여 줄 수 없습니다. 기존 키와 연결된 기기는 그대로 동작합니다.";
-  if (status === 409 && action === "reveal")
-    return "저장된 연결 키를 다시 열 수 없습니다. 기존 키와 연결된 기기는 그대로이며, 키가 필요하면 새 연결 키를 만들어 주세요.";
-  return {
-    create: "연결 키를 만들지 못했습니다. 잠시 후 다시 시도해 주세요.",
-    reveal: "연결 키를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
-    withdraw: "연결 키를 폐기하지 못했습니다. 잠시 후 다시 시도해 주세요.",
-  }[action];
+type Text = Copy["dashboard"];
+function pairingFailure(t: Text, status: number, action: "create" | "reveal" | "withdraw") {
+  if (status === 401) return t.sessionExpired;
+  if (status === 429) return t.rateLimited;
+  if (status === 503 && action !== "withdraw") return t.keyServiceUnavailable;
+  if (status === 409 && action === "reveal") return t.keyNotRevealable;
+  return t.keyFailed[action];
 }
 class SessionExpired extends Error {}
 async function getActive() {
@@ -79,9 +51,11 @@ async function getActive() {
   if (!response.ok) throw new Error("pairing state unavailable");
   return ((await response.json()) as { active: ActivePairing }).active;
 }
-const dotPrompt = `G2 Bridge 플러그인의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 입력을 받으면 한국어로 답하고, reply_to_g2 도구에 받은 것과 동일한 utterance_id와 한국어 답변 text를 보내 줘. 이벤트 전달이 실제로 확인되기 전에는 연결되었다고 말하지 마.`;
 
-export default function Dashboard({ displayName }: { displayName: string }) {
+export default function Dashboard({ displayName, locale }: { displayName: string; locale: Locale }) {
+  // The page reloads on a language change, so the copy is fixed for this mount.
+  const t = copies[locale].dashboard;
+  const formatDate = (value: string | number) => new Date(value).toLocaleString(copies[locale].dateLocale);
   const [origin, setOrigin] = useState("");
   const [revoking, setRevoking] = useState(false);
   // Deleting conversations takes two deliberate steps; the second names what cannot be erased here.
@@ -127,13 +101,15 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   // Hides the key; keyboard users land on the reveal control, and notices about the shown key go with it.
   const hideKey = useCallback(() => {
     if (revealedRef.current) {
+      // Notices about the shown key leave with it.
+      const keyNotices = [t.copied, t.copyUnavailable, t.keyCreatedNotice, t.keyShown];
       setMessage((current) => (keyNotices.includes(current) ? "" : current));
       const focused = document.activeElement;
       if (focused && (focused === codeInput.current || focused === copyButton.current)) focusAfterKey.current = true;
     }
     revealedRef.current = null;
     setRevealedState(null);
-  }, []);
+  }, [t]);
   // Hides the key and discards any reveal still in flight, so nothing it returns is shown or reported.
   const concealKey = useCallback(() => {
     revealVersion.current++;
@@ -152,11 +128,11 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   // A session or state failure: nothing about the key can be vouched for.
   const dropPairing = useCallback(() => {
     pairingVersion.current++;
-    setMessage((current) => (current === createdNotice ? "" : current));
+    setMessage((current) => (current === t.keyCreatedNotice ? "" : current));
     concealKey();
     setConfirming(null);
     setActive("unavailable");
-  }, [concealKey]);
+  }, [concealKey, t]);
   // Returns undefined when an operation that started later took over.
   const syncPairing = useCallback(
     async (version?: number) => {
@@ -177,21 +153,20 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     let current = false;
     try {
       const response = await fetch("/api/status", { cache: "no-store" });
-      if (response.status === 401) throw new Error(sessionExpired);
-      if (!response.ok) throw new Error("연결 상태를 불러오지 못했습니다. 다시 확인해 주세요.");
+      if (response.status === 401) throw new Error(t.sessionExpired);
+      if (!response.ok) throw new Error(t.statusFailed);
       const next = (await response.json()) as Status;
       if (run === refreshVersion.current) setStatus(next);
       if (version === pairingVersion.current) setError("");
       current = true;
     } catch (cause) {
       if (run === refreshVersion.current) setStatus(null);
-      if (version === pairingVersion.current)
-        setError(cause instanceof Error ? cause.message : "연결 상태를 확인하지 못했습니다.");
+      if (version === pairingVersion.current) setError(cause instanceof Error ? cause.message : t.statusUnknown);
     }
     if (current) await syncPairing(version);
     else if (version === pairingVersion.current) dropPairing();
     if (run === refreshVersion.current) setRefreshing(false);
-  }, [concealKey, syncPairing, dropPairing]);
+  }, [concealKey, syncPairing, dropPairing, t]);
   useEffect(() => {
     // Read the browser URL only after mounting to avoid an SSR mismatch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -286,8 +261,8 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         headers: { "Content-Type": "application/json" },
         body: "{}",
       });
-      if (response.status === 401) throw new SessionExpired(sessionExpired);
-      if (!response.ok) throw new Error(pairingFailure(response.status, "create"));
+      if (response.status === 401) throw new SessionExpired(t.sessionExpired);
+      if (!response.ok) throw new Error(pairingFailure(t, response.status, "create"));
       // The response may belong to an account that is no longer signed in. Its key is discarded here; the account
       // signed in now confirms it by hash, and the owner reveals it explicitly.
       const result = await confirmCreated(pairingVersion, (await response.json()) as { code: string }, getActive);
@@ -295,16 +270,16 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       showActive(result.active);
       setConfirming(null);
       if (result.confirmed) {
-        setMessage(createdNotice);
+        setMessage(t.keyCreatedNotice);
         focusAfterPairing.current = "toggle";
       } else {
-        setError("만든 키를 지금 로그인한 계정에서 확인하지 못했습니다. 상태 새로고침으로 현재 키를 확인해 주세요.");
+        setError(t.keyUnconfirmed);
         focusAfterPairing.current = "create";
       }
     } catch (cause) {
       // A refresh or another operation started meanwhile owns the newer state and its errors.
       if (version !== pairingVersion.current) return;
-      setError(cause instanceof Error ? cause.message : pairingFailure(0, "create"));
+      setError(cause instanceof Error ? cause.message : pairingFailure(t, 0, "create"));
       focusAfterPairing.current = "prompt";
       if (cause instanceof SessionExpired) dropPairing();
       // The server may or may not have replaced the key; show only what it still reports.
@@ -321,16 +296,16 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     const version = ++pairingVersion.current;
     try {
       const response = await fetch("/api/pairing", { method: "DELETE" });
-      if (response.status === 401) throw new SessionExpired(sessionExpired);
-      if (!response.ok) throw new Error(pairingFailure(response.status, "withdraw"));
+      if (response.status === 401) throw new SessionExpired(t.sessionExpired);
+      if (!response.ok) throw new Error(pairingFailure(t, response.status, "withdraw"));
       if (version !== pairingVersion.current) return;
-      setMessage(withdrawnNotice);
+      setMessage(t.keyRevokedNotice);
       setConfirming(null);
       focusAfterPairing.current = "create";
       await syncPairing();
     } catch (cause) {
       if (version !== pairingVersion.current) return;
-      setError(cause instanceof Error ? cause.message : pairingFailure(0, "withdraw"));
+      setError(cause instanceof Error ? cause.message : pairingFailure(t, 0, "withdraw"));
       focusAfterPairing.current = "prompt";
       if (cause instanceof SessionExpired) dropPairing();
       else await syncPairing();
@@ -355,14 +330,14 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     try {
       result = await revealPairing(current, active, async () => {
         const response = await fetch("/api/pairing/reveal", { method: "POST", cache: "no-store" });
-        if (response.status === 401) throw new SessionExpired(sessionExpired);
-        if (!response.ok) throw new Error(pairingFailure(response.status, "reveal"));
+        if (response.status === 401) throw new SessionExpired(t.sessionExpired);
+        if (!response.ok) throw new Error(pairingFailure(t, response.status, "reveal"));
         return (await response.json()) as RevealedPairing;
       });
     } catch (cause) {
       if (!current()) return;
       setRevealing(false);
-      setError(cause instanceof Error ? cause.message : pairingFailure(0, "reveal"));
+      setError(cause instanceof Error ? cause.message : pairingFailure(t, 0, "reveal"));
       if (cause instanceof SessionExpired) dropPairing();
       return;
     }
@@ -371,9 +346,9 @@ export default function Dashboard({ displayName }: { displayName: string }) {
     if (result) {
       revealedRef.current = result;
       setRevealedState(result);
-      setMessage("연결 키를 표시했습니다.");
+      setMessage(t.keyShown);
     } else {
-      setError("이 화면이 알고 있는 키와 서버의 현재 키가 달라 표시하지 않았습니다. 최신 상태를 다시 확인했습니다.");
+      setError(t.keyMismatch);
       await syncPairing();
     }
   }
@@ -390,14 +365,15 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ all: true }),
       });
-      if (!response.ok) throw new Error("기기 연결을 해제하지 못했습니다.");
+      if (response.status === 401) throw new Error(t.sessionExpired);
+      if (!response.ok) throw new Error(t.revokeAllFailed);
       if (version !== pairingVersion.current) return;
-      setMessage("내 모든 기기 연결을 해제하고 연결 키도 폐기했습니다. 다시 사용하려면 새 연결 키로 페어링해 주세요.");
+      setMessage(t.revokedAll);
       showActive(null);
       await refresh();
     } catch (cause) {
       if (version !== pairingVersion.current) return;
-      setError(cause instanceof Error ? cause.message : "기기 연결을 해제하지 못했습니다.");
+      setError(cause instanceof Error ? cause.message : t.revokeAllFailed);
       // The server may or may not have withdrawn the key; show only what it still reports.
       await syncPairing();
     } finally {
@@ -424,18 +400,16 @@ export default function Dashboard({ displayName }: { displayName: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ all: true }),
       });
-      if (response.status === 401) throw new Error("로그인 세션이 만료되었습니다. 다시 로그인해 주세요.");
-      if (!response.ok) throw new Error("대화 기록을 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      if (response.status === 401) throw new Error(t.sessionExpired);
+      if (!response.ok) throw new Error(t.deleteFailed);
       const result = (await response.json()) as { utterances: number; messages: number };
-      setMessage(
-        `서버의 대화 기록 ${result.utterances + result.messages}건을 삭제했습니다. 기기 연결과 Dot 구독은 그대로입니다.`,
-      );
+      setMessage(t.deleted(result.utterances + result.messages));
       setConfirmingDelete(false);
       focusAfterDelete.current = "success";
       await refresh();
     } catch (cause) {
       focusAfterDelete.current = "failure";
-      setError(cause instanceof Error ? cause.message : "대화 기록을 삭제하지 못했습니다.");
+      setError(cause instanceof Error ? cause.message : t.deleteFailed);
     } finally {
       setDeleting(false);
     }
@@ -444,20 +418,21 @@ export default function Dashboard({ displayName }: { displayName: string }) {
   async function copy(value: string) {
     try {
       await navigator.clipboard.writeText(value);
-      setMessage(copied);
+      setMessage(t.copied);
     } catch {
-      setMessage(copyUnavailable);
+      setMessage(t.copyUnavailable);
     }
   }
 
-  const unavailableStatus = refreshing ? "확인 중" : "확인 불가";
+  const unavailableStatus = refreshing ? t.statusChecking : t.statusUnavailable;
+  const dotPrompt = t.dotPrompt(origin ? `${origin}/mcp` : "");
 
   return (
-    <section className="dashboard" aria-label="내 연결 설정">
+    <section className="dashboard" aria-labelledby="dashboard-title">
       <div className="dashboard-heading">
         <div>
-          <p className="eyebrow">YOUR CONNECTION</p>
-          <h2>내 연결 설정</h2>
+          <p className="eyebrow">{t.eyebrow}</p>
+          <h2 id="dashboard-title">{t.title}</h2>
           <p className="account">{displayName}</p>
         </div>
         <button
@@ -467,25 +442,28 @@ export default function Dashboard({ displayName }: { displayName: string }) {
           onClick={() => void refresh()}
           disabled={refreshing}
         >
-          {refreshing ? "확인 중…" : "상태 새로고침"}
+          {refreshing ? t.checking : t.refresh}
         </button>
       </div>
-      <div className="status-grid" aria-label="내 연결 상태">
-        <StatusItem label="등록된 기기" value={status ? `${status.deviceCount}대` : unavailableStatus} />
+      <div className="status-grid" role="group" aria-label={t.statusLabel}>
+        <StatusItem label={t.devices} value={status ? t.deviceCount(status.deviceCount) : unavailableStatus} />
         <StatusItem
-          label="Dot 구독"
-          value={status ? (status.subscribed ? "구독 등록됨" : "구독 대기") : unavailableStatus}
+          label={t.dot}
+          value={status ? (status.subscribed ? t.dotSubscribed : t.dotWaiting) : unavailableStatus}
         />
-        <StatusItem label="대기 중인 음성 입력" value={status ? `${status.pendingCount}건` : unavailableStatus} />
-        <StatusItem label="음성 인식" value={status ? "휴대폰 앱에서 확인" : unavailableStatus} />
+        <StatusItem label={t.pending} value={status ? t.pendingCount(status.pendingCount) : unavailableStatus} />
+        <StatusItem label={t.speech} value={status ? t.speechValue : unavailableStatus} />
       </div>
       {status?.delivery?.last && (
         <p className="helper">
-          최근 Dot 전달: {deliveryLabels[status.delivery.last.category]}
-          {status.delivery.last.httpStatus ? ` (HTTP ${status.delivery.last.httpStatus})` : ""},{" "}
-          {new Date(status.delivery.last.at).toLocaleString("ko-KR")}. 답변 대기 {status.delivery.acceptedAwaitingReply}
-          건, 재시도 대기 {status.delivery.backingOff}건, 재시도 중단 {status.delivery.exhausted}건. 수신은 Dot이
-          처리했거나 G2에 표시되었다는 뜻이 아닙니다.
+          {t.lastDelivery(
+            t.delivery[status.delivery.last.category] +
+              (status.delivery.last.httpStatus ? ` (HTTP ${status.delivery.last.httpStatus})` : ""),
+            formatDate(status.delivery.last.at),
+            status.delivery.acceptedAwaitingReply,
+            status.delivery.backingOff,
+            status.delivery.exhausted,
+          )}
         </p>
       )}
       <div role="status" aria-live="polite" className="feedback">
@@ -498,22 +476,25 @@ export default function Dashboard({ displayName }: { displayName: string }) {
       )}
       <div className="setup-grid">
         <section className="setup-card" aria-labelledby="pair-title">
-          <span className="step">01</span>
-          <h3 id="pair-title">연결 1: Even Hub 기기 페어링</h3>
-          <p>
-            G2 안경과 이 서버를 잇는 연결입니다. ChatGPT 연결과는 별개입니다. 휴대폰의 Even Hub에서 G2 Bridge 앱을 열고,
-            아래 서버 주소와 연결 키를 입력하세요. 안경이 휴대폰에 연결되어 있어야 합니다.
-          </p>
-          <AddressField label="Even Hub 서버 주소" value={origin} onCopy={copy} />
-          <p className="helper">
-            연결 키는 만료되지 않으며 여러 기기에 반복해서 쓸 수 있습니다. 평소에는 가려져 있고, 이 계정으로 로그인한
-            상태에서 키 확인을 누르면 언제든 다시 보고 복사할 수 있습니다. 새 키를 만들거나 키를 폐기하면 이전 키로는 새
-            기기를 연결할 수 없지만, 이미 연결된 기기는 그대로 유지됩니다.
-          </p>
+          <span className="step" aria-hidden="true">
+            01
+          </span>
+          <h3 id="pair-title">{t.pairTitle}</h3>
+          <p>{t.pairBody}</p>
+          <AddressField
+            id="server-address"
+            label={t.serverAddress}
+            value={origin}
+            pending={t.addressPending}
+            copyText={t.copy}
+            copyLabel={t.copyLabel(t.serverAddress)}
+            onCopy={copy}
+          />
+          <p className="helper">{t.keyHelp}</p>
           {active && active !== "unavailable" && active.revealable && (
             <div className="pairing-result" role="group" aria-labelledby="pairing-code-label">
               <label id="pairing-code-label" htmlFor="pairing-code">
-                Even Hub 연결 키
+                {t.keyLabel}
               </label>
               <div className="code-row">
                 <input
@@ -521,7 +502,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
                   id="pairing-code"
                   readOnly
                   value={revealed?.code ?? ""}
-                  placeholder="가려짐 · 키 확인을 누르세요"
+                  placeholder={t.keyHidden}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -534,35 +515,26 @@ export default function Dashboard({ displayName }: { displayName: string }) {
                   disabled={revealing || refreshing || busy || withdrawing || revoking}
                   onClick={() => void toggleKey()}
                 >
-                  {revealing ? "확인 중…" : revealed ? "키 숨기기" : "키 확인"}
+                  {revealing ? t.checking : revealed ? t.hideKey : t.showKey}
                 </button>
                 <button
                   ref={copyButton}
                   className="button secondary small"
                   type="button"
-                  aria-label="Even Hub 연결 키 복사"
+                  aria-label={t.copyLabel(t.keyLabel)}
                   disabled={!revealed}
                   onClick={() => revealed && void copy(revealed.code)}
                 >
-                  복사
+                  {t.copy}
                 </button>
               </div>
-              {active.createdAt && <p>만든 시각: {new Date(active.createdAt).toLocaleString("ko-KR")} · 만료 없음</p>}
+              {active.createdAt && <p>{t.keyCreated(formatDate(active.createdAt))}</p>}
             </div>
           )}
           {active && active !== "unavailable" && !active.revealable && (
-            <p className="helper">
-              이전 방식의 10분 연결 코드가 남아 있습니다
-              {active.expiresAt ? `(만료 ${new Date(active.expiresAt).toLocaleString("ko-KR")})` : ""}. 이 코드는 다시
-              볼 수 없으니, 새 연결 키를 한 번 만들어 주세요. 새 키는 만료 없이 계속 쓸 수 있습니다.
-            </p>
+            <p className="helper">{t.legacyCode(active.expiresAt ? formatDate(active.expiresAt) : null)}</p>
           )}
-          {active === "unavailable" && (
-            <p className="helper">
-              연결 키 상태를 확인하지 못했습니다. 상태 새로고침으로 다시 확인해 주세요. 확인 전에는 키를 새로 만들 수
-              없습니다.
-            </p>
-          )}
+          {active === "unavailable" && <p className="helper">{t.keyUnavailable}</p>}
           <div className="pairing-actions">
             <button
               ref={pairingButton}
@@ -571,7 +543,7 @@ export default function Dashboard({ displayName }: { displayName: string }) {
               disabled={busy || revoking || withdrawing || active === undefined || active === "unavailable"}
               onClick={() => (active ? startConfirm("rotate") : void createPairing())}
             >
-              {busy ? "키 만드는 중…" : active ? "새 연결 키 만들기" : "연결 키 만들기"}
+              {busy ? t.creatingKey : active ? t.createNewKey : t.createKey}
             </button>
             {active && active !== "unavailable" && (
               <button
@@ -581,16 +553,14 @@ export default function Dashboard({ displayName }: { displayName: string }) {
                 disabled={busy || revoking || withdrawing}
                 onClick={() => startConfirm("withdraw")}
               >
-                연결 키 폐기
+                {t.revokeKey}
               </button>
             )}
           </div>
           {confirming && (
             <div className="pairing-confirm" role="group" aria-labelledby="pairing-confirm-title">
               <p id="pairing-confirm-title" ref={pairingPrompt} tabIndex={-1}>
-                {confirming === "rotate"
-                  ? "새 키를 만들면 지금 키로는 더 이상 새 기기를 연결할 수 없습니다. 이미 연결된 기기는 그대로 유지됩니다. 새 키를 만들까요?"
-                  : "키를 폐기하면 새 키를 만들기 전까지 어떤 기기도 새로 연결할 수 없습니다. 이미 연결된 기기는 그대로 유지됩니다. 폐기할까요?"}
+                {confirming === "rotate" ? t.confirmRotate : t.confirmRevoke}
               </p>
               <button
                 type="button"
@@ -600,11 +570,11 @@ export default function Dashboard({ displayName }: { displayName: string }) {
               >
                 {confirming === "rotate"
                   ? busy
-                    ? "키 만드는 중…"
-                    : "새 키 만들기"
+                    ? t.creatingKey
+                    : t.createNewKey
                   : withdrawing
-                    ? "폐기 중…"
-                    : "연결 키 폐기"}
+                    ? t.revokingKey
+                    : t.revokeKey}
               </button>
               <button
                 type="button"
@@ -612,92 +582,78 @@ export default function Dashboard({ displayName }: { displayName: string }) {
                 disabled={busy || withdrawing}
                 onClick={cancelConfirm}
               >
-                취소
+                {t.cancel}
               </button>
             </div>
           )}
         </section>
         <section className="setup-card" aria-labelledby="dot-title">
-          <span className="step">02</span>
-          <h3 id="dot-title">연결 2: ChatGPT MCP 서버 추가</h3>
-          <p>
-            Dot과 이 서버를 잇는 연결로, Even Hub 연결 키는 쓰지 않습니다. 이 사이트의 MCP 플러그인이 ChatGPT에 설치되어
-            있어야 합니다. 없다면 데스크톱 브라우저의 ChatGPT 웹에서 아래 주소를 사용자 지정 MCP 서버로 추가하고
-            설치하세요. 그다음 Dot에 아래 요청을 보내 이벤트 구독을 요청하세요. 같은 Dot을 모바일 앱에서도 이어서 쓸 수
-            있지만, 구독 생성과 휴대폰 앱에서의 이벤트 전달은 아직 확인되지 않았습니다.
-          </p>
-          <AddressField label="Dot MCP 서버 주소" value={origin ? `${origin}/mcp` : ""} onCopy={copy} />
-          <label className="sr-only" htmlFor="dot-prompt">
-            Dot에 보낼 설정 요청
+          <span className="step" aria-hidden="true">
+            02
+          </span>
+          <h3 id="dot-title">{t.dotTitle}</h3>
+          <p>{t.dotBody}</p>
+          <ol className="setup-steps">
+            {t.dotSteps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          <AddressField
+            id="mcp-address"
+            label={t.mcpAddress}
+            value={origin ? `${origin}/mcp` : ""}
+            pending={t.addressPending}
+            copyText={t.copy}
+            copyLabel={t.copyLabel(t.mcpAddress)}
+            onCopy={copy}
+          />
+          <label className="field-label" htmlFor="dot-prompt">
+            {t.promptLabel}
           </label>
           <textarea id="dot-prompt" readOnly value={dotPrompt} rows={6} />
           <button className="button secondary" type="button" onClick={() => void copy(dotPrompt)}>
-            설정 요청 복사
+            {t.copyPrompt}
           </button>
         </section>
       </div>
       <section className="notice" aria-labelledby="stt-title">
-        <strong id="stt-title">음성 인식: 휴대폰의 G2 Bridge 앱에 Soniox API 키 입력</strong>
-        <p>
-          음성은 휴대폰에서 Soniox 클라우드로 바로 전송되어 그곳에서 텍스트로 바뀌고(기기 내 음성 인식 아님), 이
-          서버에는 변환된 텍스트만 전달됩니다. 이 사이트에는 API 키를 입력하지 마세요. 서버 관리자 설정도 필요하지
-          않습니다.
-        </p>
+        <span className="step" aria-hidden="true">
+          03
+        </span>
+        <h3 id="stt-title">{t.speechTitle}</h3>
+        <p>{t.speechBody}</p>
         <ol>
           <li>
-            Soniox 콘솔에서 본인 계정의 API 키를 만들고 실시간 음성 인식(real-time transcription) 권한을 허용하세요.{" "}
+            {t.speechSteps[0]}{" "}
             <a href={sonioxKeyGuide} target="_blank" rel="noreferrer">
-              Soniox API 키 권한 안내(새 창)
+              {t.sonioxGuide}
             </a>
           </li>
-          <li>휴대폰 Even Hub에서 G2 Bridge 앱의 설정을 열고 키를 붙여 넣으세요.</li>
-          <li>
-            키는 기본적으로 앱을 사용하는 동안에만 메모리에 보관됩니다. 기억하기를 선택하면 Even Hub 앱 저장소에 남으며,
-            같은 설정 화면에서 언제든 지우거나 새 키로 바꿀 수 있습니다.
-          </li>
+          <li>{t.speechSteps[1]}</li>
+          <li>{t.speechSteps[2]}</li>
         </ol>
-        <p>
-          기억한 키의 안전성은 휴대폰과 Even Hub 앱을 얼마나 믿을 수 있는지에 달려 있으며, 별도 암호화나 유출 방지를
-          보장하지 않습니다. 사용 요금은 본인 Soniox 계정에 청구되고, 변환된 텍스트는 이 서버에 저장된 뒤 Dot에
-          전달됩니다.
-        </p>
-        <p>
-          이 서버는 휴대폰에 키가 입력되었는지 알 수 없으니 휴대폰 앱에서 확인하세요. 서버 측 음성 인식(이전 방식):{" "}
-          {status
-            ? status.sttConfigured
-              ? "서버에 설정되어 있음, 휴대폰 키와는 별개"
-              : "사용 안 함"
-            : unavailableStatus}
-          .
-        </p>
+        <p>{t.speechPrivacy}</p>
       </section>
       {status && status.deviceCount > 0 && (
         <div className="device-actions">
-          <p>
-            내 계정에 연결된 기기의 접근을 모두 종료하고 연결 키도 폐기합니다. 다시 사용하려면 새 연결 키로 페어링해야
-            합니다.
-          </p>
+          <p>{t.revokeAllBody}</p>
           <button
             type="button"
             className="button secondary small"
             disabled={revoking || busy}
             onClick={() => void revokeAll()}
           >
-            {revoking ? "연결 해제 중…" : "내 모든 기기 연결 해제"}
+            {revoking ? t.revokingAll : t.revokeAll}
           </button>
         </div>
       )}
       {status && (
         <div className="device-actions" role="group" aria-labelledby="delete-conversations-title">
           <div>
-            <p id="delete-conversations-title">
-              이 계정의 대화 기록(음성 입력 텍스트, Dot 답변, 알림 메시지)을 서버에서 바로 삭제합니다. 기기 연결과 Dot
-              구독은 유지됩니다.
-            </p>
+            <p id="delete-conversations-title">{t.deleteBody}</p>
             {confirmingDelete && (
               <p ref={deletePrompt} tabIndex={-1}>
-                삭제하면 되돌릴 수 없습니다. 이미 ChatGPT(Dot)나 Soniox로 전달된 내용, 휴대폰에 이미 표시된 내용은 이
-                서버에서 지울 수 없습니다. 정말 삭제할까요?
+                {t.deleteConfirm}
               </p>
             )}
           </div>
@@ -709,30 +665,27 @@ export default function Dashboard({ displayName }: { displayName: string }) {
                 disabled={deleting}
                 onClick={() => void deleteConversations()}
               >
-                {deleting ? "삭제 중…" : "대화 기록 영구 삭제"}
+                {deleting ? t.deleting : t.deleteForever}
               </button>
               <button type="button" className="button secondary small" disabled={deleting} onClick={cancelDelete}>
-                취소
+                {t.cancel}
               </button>
             </div>
           ) : (
             <button ref={deleteTrigger} type="button" className="button secondary small" onClick={startDelete}>
-              대화 기록 삭제
+              {t.deleteStart}
             </button>
           )}
         </div>
       )}
-      <section className="last-step">
-        <span className="step">03</span>
+      <section className="last-step" aria-labelledby="ask-title">
+        <span className="step" aria-hidden="true">
+          04
+        </span>
         <div>
-          <h3>G2에서 말하고, 답변 확인하기</h3>
-          <p>
-            두 연결과 Dot 구독을 마치면 Even Hub 앱에서 말하거나 입력하세요. Dot이 받은 입력에 답하면 G2 화면에
-            표시되도록 설계되어 있습니다. 실제 클라우드 Dot의 구독 등록은 확인되었고, 직접 실행한 MCP 테스트 메시지의 G2
-            표시는 확인됨; 클라우드 Dot 자동 응답과 Mac-off 음성 왕복은 미검증.
-          </p>
+          <h3 id="ask-title">{t.askTitle}</h3>
+          <p>{t.askBody}</p>
         </div>
-        <span className="pending-badge">Mac 없는 왕복 검증 대기</span>
       </section>
     </section>
   );
@@ -748,28 +701,35 @@ function StatusItem({ label, value }: { label: string; value: string }) {
 }
 
 function AddressField({
+  id,
   label,
   value,
+  pending,
+  copyText,
+  copyLabel,
   onCopy,
 }: {
+  id: string;
   label: string;
   value: string;
+  pending: string;
+  copyText: string;
+  copyLabel: string;
   onCopy: (value: string) => Promise<void>;
 }) {
-  const id = label === "Even Hub 서버 주소" ? "server-address" : "mcp-address";
   return (
     <div className="address-field">
       <label htmlFor={id}>{label}</label>
       <div className="code-row">
-        <input id={id} readOnly value={value} placeholder="서버 주소 확인 중" />
+        <input id={id} readOnly value={value} placeholder={pending} />
         <button
           type="button"
           className="button secondary small"
-          aria-label={`${label} 복사`}
+          aria-label={copyLabel}
           disabled={!value}
           onClick={() => void onCopy(value)}
         >
-          복사
+          {copyText}
         </button>
       </div>
     </div>

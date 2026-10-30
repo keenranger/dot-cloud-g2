@@ -1,4 +1,4 @@
-# Lens MCP for G2 — release readiness checklist and reviewer packet draft
+# Dots Lens for G2 — release readiness checklist and reviewer packet draft
 
 **POLICY/REVIEWER PACKET DRAFT — NOT A PUBLIC STORE RELEASE OR LEGAL APPROVAL.** Updated 2026-10-24. Sites version 6 deployed successfully on 2026-10-24 at 12:16:10.672605 UTC from signed source `7f48b9c4d217e4e111477c5aed261c08133ed841`. Even Hub CLI upload and read-back confirmed version 0.5.0, build 120792, Private, with no channels. Public store release, beta promotion and policy approval are not established. Re-read external state before acting.
 
@@ -31,7 +31,7 @@ Status values are DONE, OPEN, OWNER (needs an owner decision) and PENDING (separ
 | --- | --- | --- | --- |
 | Package ID | Reverse-domain, lowercase, no hyphens | Source: `app.mark.evendotscloud` (`even-app/scripts/manifest.mjs`) | DONE |
 | Edition, version, SDK | `202601`; x.y.z; `min_sdk_version` at least 0.0.14 | Source: `202601`, `0.5.0` (Private build), `0.0.16` | DONE (source) |
-| Name | 20 characters or fewer, no "Even"; must match listing and glasses name | Source: `Lens MCP for G2` (15). Portal: the listing name matches. Physical: the name shown on the glasses is not observed. | DONE (source, portal); glasses name OPEN |
+| Name | 20 characters or fewer, no "Even"; must match listing and glasses name | Source: `Dots Lens for G2` (16, renamed 2026-10-30 from `Lens MCP for G2`). Portal: last observed (2026-10-24) as `Lens MCP for G2`; must be updated to match. Physical: the name shown on the glasses is not observed. | DONE (source); portal match and glasses name OPEN |
 | Permissions used and described | `network` with whitelist and `g2-microphone`, each `desc` 1–300 characters | Source: only these two are declared, and both are used. Portal: permissions checklist item is checked. | DONE |
 | No bundled secrets | No API key in the `.ehpk` | Source: no key in source or manifest. The Soniox key is supplied by the user at runtime. | DONE; reviewer note below |
 | Changelog | Non-empty, 500 characters or fewer | Portal/CLI: 0.4.2 has a changelog. 0.5.0: CLI upload completed; public release notes remain draft | OPEN (0.5.0) |
@@ -41,7 +41,7 @@ Status values are DONE, OPEN, OWNER (needs an owner decision) and PENDING (separ
 
 | Gate | Requirement | Evidence | Status |
 | --- | --- | --- | --- |
-| Name and tagline | Name up to 20 characters, tagline up to 50 | Portal: populated (15/20, 45/50) | DONE |
+| Name and tagline | Name up to 20 characters, tagline up to 50 | Portal: populated (15/20, 45/50) with the previous name `Lens MCP for G2`; source name is now `Dots Lens for G2` (16/20) | OPEN (portal name update) |
 | Icon | 24×24 monochrome #F4F4F4, 2×2 blocks, legible | Portal: icon checklist item is checked. Source: `assets/store/icon-24.png` | DONE |
 | Description and Category | Category and About are both required | Portal: About is populated (474/2000). **Category is unset.** | OWNER (choose a category) |
 | Screenshots and cover | 576×288 PNG matching on-device render; monochrome background | Portal: none uploaded. Mock: `assets/store/screenshot-first-run.png` (simulator capture) is ready. | OPEN (upload) |
@@ -89,7 +89,7 @@ No physical target phone was available in the 2026-10-24 environment audit, so e
 
 A verified uploaded 0.5.0 Private package exists from `7f48b9c`; paste these reviewer notes only after owner approval. Public developer identity/contact are approved (2026-10-24): keenranger / kghnkl0103@gmail.com. These reviewer notes do not settle legal details, mailbox operation, effective dates or hosting.
 
-> **What it is.** Lens MCP for G2 is an independent companion that connects the user's own ChatGPT Dot to G2 through MCP. It is not an official Even Realities app and not a general-purpose MCP client.
+> **What it is.** Dots Lens for G2 is an independent companion that connects the user's own ChatGPT Dot to G2 through MCP. It is not an official Even Realities app and not a general-purpose MCP client.
 >
 > **Setup.** Sign in to the relay with ChatGPT and create a pairing code (reusable until it expires 10 minutes after creation; a new code replaces it). Enter the relay origin and the code in the companion. Pairing is saved through SDK local storage. Typed messages work right after pairing.
 >

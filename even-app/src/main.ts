@@ -460,6 +460,9 @@ const expired = () =>
     "Replies older than the keep period were removed from this phone too.",
     "보관 기간이 지난 답변을 이 기기에서도 지웠습니다.",
   );
+const ackPending = () => t("final answer coming", "최종 답변 대기");
+const ackLabel = () => t("Interim reply", "중간 답변");
+const finalLabel = () => t("Final answer", "최종 답변");
 const report = (e: unknown) => status(errorText(e, () => t("Something went wrong.", "작업을 완료하지 못했습니다.")));
 const current = (version: number) => !exited && generation === version;
 function controls(): void {
@@ -506,10 +509,11 @@ function controls(): void {
   el("record-hint").hidden = !hint;
   el<HTMLButtonElement>("prev-message").disabled = history.index <= 0;
   el<HTMLButtonElement>("next-message").disabled = history.index < 0 || history.index >= history.messages.length - 1;
+  const stage = history.selected ? stageLabel(history.selected) : "";
   const position = history.messages.length
     ? t(
-        `Message ${history.index + 1} of ${history.messages.length}`,
-        `${history.index + 1} / ${history.messages.length}개 메시지`,
+        `Message ${history.index + 1} of ${history.messages.length}${stage ? ` · ${stage}` : ""}`,
+        `${history.index + 1} / ${history.messages.length}개 메시지${stage ? ` · ${stage}` : ""}`,
       )
     : t("No messages yet.", "아직 받은 메시지가 없습니다.");
   // Rewriting identical text can make some screen readers announce it again.
@@ -639,17 +643,24 @@ function renderDisplay(quiet = captionShown()): void {
 function displayStatus(text: Said): void {
   say("display", text, true);
 }
+/**
+ * An utterance's acknowledgement and final answer are separate messages: the acknowledgement is labelled intermediate,
+ * and says the final answer is still coming until it is kept here; the final is labelled final beside its
+ * acknowledgement. A reply without an acknowledgement keeps no label.
+ */
+function stageLabel(reply: Reply): string {
+  if (reply.stage === "ack") return history.paired(reply) ? ackLabel() : `${ackLabel()} · ${ackPending()}`;
+  return history.paired(reply) ? finalLabel() : "";
+}
 /** The message position leads the header, so moving between replies with identical text is still visible. */
 function g2Header(): string {
-  const position =
-    selection.startsWith("reply:") && history.index >= 0
-      ? t(
-          `Reply ${history.index + 1}/${history.messages.length}`,
-          `답변 ${history.index + 1}/${history.messages.length}`,
-        )
-      : "";
+  const reading = selection.startsWith("reply:") && history.index >= 0;
+  const position = reading
+    ? t(`Reply ${history.index + 1}/${history.messages.length}`, `답변 ${history.index + 1}/${history.messages.length}`)
+    : "";
+  const stage = reading && history.selected ? stageLabel(history.selected) : "";
   const note = headerNote?.view === view() ? headerNote.text() : "";
-  return Array.from([position, note, wakeLabel()].filter(Boolean).join(" · ")).slice(0, 70).join("");
+  return Array.from([position, stage, note, wakeLabel()].filter(Boolean).join(" · ")).slice(0, 70).join("");
 }
 function showSelectedReply(): void {
   const reply = history.selected;
@@ -817,8 +828,9 @@ async function poll(): Promise<void> {
         phoneReply = undefined;
         displayText(expired);
       }
-    } else if (changed && captionHolds()) {
+    } else if (changed && captionHolds() && history.selected!.utterance_id !== caption!.voice.id) {
       // The phone shows the reply now; G2 keeps the running speech and shows the reply when the capture is submitted.
+      // A reply to the capture itself (its acknowledgement or final) answers what the notice is waiting for, below.
       say("reply", history.selected!.text);
       phoneReply = history.selected!.message_id;
       status(
@@ -838,7 +850,19 @@ async function poll(): Promise<void> {
       status(
         conversation === "erased"
           ? () => t(`${erased()} Showing the new reply.`, `${erased()} 새 답변을 표시합니다.`)
-          : () => t("Dot replied · showing it on G2.", "Dot 답변 수신 · G2 표시를 요청합니다."),
+          : history.selected!.stage === "ack"
+            ? () =>
+                t(
+                  `Dot ${ackLabel().toLowerCase()} received · ${ackPending()} · showing it on G2.`,
+                  `Dot ${ackLabel()} 수신 · ${ackPending()} · G2 표시를 요청합니다.`,
+                )
+            : history.paired(history.selected!)
+              ? () =>
+                  t(
+                    `Dot ${finalLabel().toLowerCase()} received · showing it on G2. The ${ackLabel().toLowerCase()} stays in the previous message.`,
+                    `Dot ${finalLabel()} 수신 · G2 표시를 요청합니다. ${ackLabel()}도 이전 메시지에 남아 있습니다.`,
+                  )
+              : () => t("Dot replied · showing it on G2.", "Dot 답변 수신 · G2 표시를 요청합니다."),
       );
       showSelectedReply();
     } else if (history.revision !== kept && selection === replyNotice) restoreReader();

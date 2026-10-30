@@ -40,7 +40,9 @@ export function failureText(kind: RequestFailure, submission: boolean): string {
     cancelled: "The app was closed or switched on the glasses, so the server request was cancelled.",
     network: "Could not reach the server. Check your network connection.",
   }[kind];
-  return submission ? `${cause} It is not known whether the server saved it.` : cause;
+  return submission
+    ? `${cause} It is not known whether the server saved it. If it was saved, the answer is not cancelled and will show here when it arrives.`
+    : cause;
 }
 
 export function sttText(error: SonioxTranscriptionError): string {

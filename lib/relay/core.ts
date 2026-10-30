@@ -30,6 +30,7 @@ export interface Store {
   put(record: RecordValue): Promise<void>;
   compareAndSwap(record: RecordValue, previous: string): Promise<boolean>;
   writeReply(record: RecordValue, previous: string, message: RecordValue): Promise<boolean>;
+  writeAck(message: RecordValue, utteranceId: string, cutoff: string): Promise<boolean>;
   remove(owner: string, kind: string, id: string): Promise<void>;
   compareAndDelete(owner: string, kind: string, id: string, previous: string): Promise<boolean>;
   replacePairing(record: RecordValue): Promise<void>;
@@ -77,6 +78,13 @@ type Utterance = {
   deliveryLeaseId?: string;
   lastDelivery?: DeliveryOutcome;
 };
+// A reply has two stages per utterance, each with a fixed message ID and sequence number: an optional acknowledgement
+// the model wrote before working, then the final answer that completes the utterance. Messages without a stage are
+// final answers or proactive messages.
+type ReplyStage = "ack" | "final";
+const stageSeq: Record<ReplyStage, number> = { ack: 1, final: 2 };
+const stageMessageId = (stage: ReplyStage, utteranceId: string) =>
+  `${stage === "ack" ? "ack" : "reply"}_${utteranceId}`;
 const text = z.string().trim().min(1).max(8000);
 export const utteranceInput = z.object({ id: z.string().uuid(), text: text.max(4000) }).strict();
 const sessionArgs = z.object({ session_id: z.literal("g2") }).strict();
@@ -650,11 +658,14 @@ export class Relay {
       throw new RelayError(409, "Utterance already has a different reply");
     value.reply = params.text;
     value.status = "replied";
-    const message = this.record(owner, "message", `reply_${value.id}`, {
-      message_id: `reply_${value.id}`,
+    const messageId = stageMessageId("final", value.id);
+    const message = this.record(owner, "message", messageId, {
+      message_id: messageId,
       utterance_id: value.id,
       text: params.text,
       deviceId: value.deviceId,
+      stage: "final",
+      seq: stageSeq.final,
       createdAt: new Date(this.now()).toISOString(),
     });
     if (!(await this.store.writeReply(this.record(owner, "utterance", value.id, value), record.value, message))) {
@@ -662,7 +673,57 @@ export class Relay {
       if (!(await this.store.get(owner, "utterance", value.id))) throw new RelayError(404, "Unknown utterance");
       throw new RelayError(409, "Utterance changed; retry with the same reply");
     }
-    return { utterance_id: value.id, stored_for_g2: true, physical_display_confirmed: false };
+    return {
+      utterance_id: value.id,
+      message_id: messageId,
+      stage: "final",
+      stored_for_g2: true,
+      physical_display_confirmed: false,
+    };
+  }
+  // The first stage: shown on G2 while the model works, it leaves the utterance pending for the final answer. It is
+  // stored only while the utterance is live and unanswered, so a late or retried acknowledgement never follows a final.
+  async acknowledge(owner: string, input: unknown) {
+    const params = z
+      .object({ utterance_id: z.string().uuid(), text: text.max(500) })
+      .strict()
+      .parse(input);
+    const messageId = stageMessageId("ack", params.utterance_id);
+    const stored = { utterance_id: params.utterance_id, message_id: messageId, stage: "ack" as const };
+    const settled = async () => {
+      const record = await this.store.get(owner, "utterance", params.utterance_id);
+      if (!record || !this.live(record)) throw new RelayError(404, "Unknown utterance");
+      const existing = await this.store.get(owner, "message", messageId);
+      if (existing) {
+        if (JSON.parse(existing.value).text !== params.text)
+          throw new RelayError(409, "Utterance already has a different acknowledgement");
+        return { done: { ...stored, stored_for_g2: true, physical_display_confirmed: false } };
+      }
+      const value: Utterance = JSON.parse(record.value);
+      // Not an error, so the caller does not retry: the final answer is already stored and shown instead.
+      if (value.status === "replied")
+        return {
+          done: { ...stored, stored_for_g2: false, superseded_by_final: true, physical_display_confirmed: false },
+        };
+      return { pending: value };
+    };
+    const first = await settled();
+    if (first.done) return first.done;
+    const message = this.record(owner, "message", messageId, {
+      message_id: messageId,
+      utterance_id: params.utterance_id,
+      text: params.text,
+      deviceId: first.pending.deviceId,
+      stage: "ack",
+      seq: stageSeq.ack,
+      createdAt: new Date(this.now()).toISOString(),
+    });
+    if (await this.store.writeAck(message, params.utterance_id, this.cutoff()))
+      return { ...stored, stored_for_g2: true, physical_display_confirmed: false };
+    // A concurrent identical retry, a final answer, a deletion or expiry won the race; report what holds now.
+    const second = await settled();
+    if (second.done) return second.done;
+    throw new RelayError(409, "Utterance changed; retry with the same acknowledgement");
   }
   async send(owner: string, input: unknown) {
     const params = z.object({ message_id: z.string().uuid(), text }).strict().parse(input);
@@ -675,16 +736,23 @@ export class Relay {
     }
     return { message_id: params.message_id, stored_for_g2: true, physical_display_confirmed: false };
   }
-  async poll(device: Device) {
-    // One leased event attempt per active device poll; no background execution is promised.
-    await this.drain(device);
+  // `background` keeps a task running after the response (the Workers request context's waitUntil); without it the
+  // task finishes before poll returns.
+  async poll(device: Device, background?: (task: Promise<unknown>) => void) {
     const cutoff = this.cutoff();
+    // Stored replies are read before the event retry, so a slow callback never delays them.
     const snapshot = await this.store.pollSnapshot(device.owner, device.id, cutoff);
+    // One leased event attempt per active device poll; no background execution is promised beyond this request. A
+    // failed attempt stays durable for the next poll or resubmission and never fails the read.
+    const retry = this.drain(device).catch(() => console.warn("event_retry_failed"));
+    if (background) background(retry);
+    else await retry;
     return {
+      // An acknowledgement stays beside its final answer, so the device can read both; seq orders them on a tie.
       messages: snapshot.messages
         .map((r) => JSON.parse(r.value))
         .filter((r) => !r.deviceId || r.deviceId === device.id)
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.seq ?? 0) - (b.seq ?? 0))
         .slice(-100),
       // Increases once per owner deletion; companions drop cached history when it rises.
       conversation_revision: snapshot.revision,

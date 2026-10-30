@@ -140,6 +140,29 @@ export class D1Store implements Store {
     ]);
     return results[0].meta.changes === 1;
   }
+  // One statement: the acknowledgement exists only if its utterance was live and unanswered when it was written, so
+  // it can never follow a final answer, a deletion or expiry.
+  async writeAck(message: RecordValue, utteranceId: string, cutoff: string) {
+    return (
+      (
+        await this.db
+          .prepare(
+            "INSERT OR IGNORE INTO relay_records (owner,kind,id,value,expires_at) SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM relay_records WHERE owner = ? AND kind = 'utterance' AND id = ? AND json_extract(value, '$.status') != 'replied' AND json_extract(value, '$.createdAt') > ?)",
+          )
+          .bind(
+            message.owner,
+            message.kind,
+            message.id,
+            message.value,
+            message.expires_at,
+            message.owner,
+            utteranceId,
+            cutoff,
+          )
+          .run()
+      ).meta.changes === 1
+    );
+  }
   async compareAndDelete(owner: string, kind: string, id: string, previous: string) {
     return (
       (

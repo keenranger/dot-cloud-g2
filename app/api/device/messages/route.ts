@@ -1,9 +1,10 @@
+import { waitUntil } from "cloudflare:workers";
 import { deviceIdentity, failure, json, runtime, deviceCors, deviceOptions } from "@/lib/relay/http";
 export async function GET(request: Request) {
   try {
     const { relay } = runtime();
     const device = await deviceIdentity(request, relay);
-    return deviceCors(json(await relay.poll(device)));
+    return deviceCors(json(await relay.poll(device, waitUntil)));
   } catch (error) {
     return deviceCors(failure(error));
   }

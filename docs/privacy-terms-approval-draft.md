@@ -1,5 +1,7 @@
 # Dots Lens for G2 — privacy notice and terms approval draft
 
+> **Superseded on 2026-10-26.** The published Privacy Notice and Terms of Use are served at `/privacy` and `/terms` on the relay (`app/privacy/page.tsx`, `app/terms/page.tsx`), effective 2026-10-26. Those pages are the current text; this draft is kept as the historical approval record and its "not published" status and 0.4.2/0.5.0 candidate notes no longer describe production.
+
 **LOCAL DRAFT — NOT PUBLISHED, NOT LEGALLY REVIEWED, NOT APPROVED FOR PUBLIC USE.** Prepared 2026-10-23, updated 2026-10-24 for the local 0.5.0 candidate (source base `a266438` plus uncommitted backend and companion changes whose final review is pending). Current production is Even Hub 0.4.2 (Private build) with a relay that does not yet include the retention and deletion behavior described here. The owner approved the 30-day retention and owner-erase requirement and the iPhone + G2 target. Public developer/operator display name and support/privacy email are approved as recorded below. Policy URL, effective date, phone/address and legal approval remain unresolved; their placeholders must stay visibly unfilled until approved.
 
 > **Version note.** Sections marked *0.5.0 candidate* describe behavior that is implemented locally but not deployed or uploaded. Until 0.5.0 is deployed and verified, the production relay keeps conversations with no retention period and no user-facing deletion. Do not publish this notice for production 0.4.2 without that caveat.

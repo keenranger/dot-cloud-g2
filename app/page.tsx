@@ -3,6 +3,7 @@ import Link from "next/link";
 import { chatGPTSignInPath, chatGPTSignOutPath, getChatGPTUser } from "./chatgpt-auth";
 import Dashboard from "./components/dashboard";
 import LanguageSwitch from "./components/language-switch";
+import { PolicyLinks } from "./components/policy-page";
 import { LOCALE_COOKIE, PRODUCT_NAME, copy, localePath, resolveLocale } from "./i18n/dashboard";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +72,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       <footer>
         <span>{PRODUCT_NAME}</span>
         <span>{t.footer}</span>
+        <PolicyLinks label={t.policies} privacy={t.privacy} terms={t.terms} />
       </footer>
     </div>
   );

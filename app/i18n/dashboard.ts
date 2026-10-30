@@ -54,6 +54,9 @@ const en = {
     previewBody:
       "Dot's replies to your glasses are still being tested on real devices, so some replies may not arrive yet.",
     footer: "Your glasses and your Dot, connected.",
+    policies: "Policies",
+    privacy: "Privacy Notice",
+    terms: "Terms of Use",
   },
   dashboard: {
     eyebrow: "YOUR CONNECTION",
@@ -124,7 +127,7 @@ const en = {
     copyPrompt: "Copy setup message",
     // The event name, session, tool and utterance_id are the relay contract; keep them verbatim in every locale.
     dotPrompt: (connector: string) =>
-      `Subscribe to the "utterance.created" event from the connector at ${connector || "this site's /mcp address"} with session "g2". When a new voice question arrives, answer it in the language it was asked in, then call reply_to_g2 with the same utterance_id you received and your answer as text. Don't tell me you're connected until an event has actually arrived.`,
+      `Subscribe to the "utterance.created" event from the connector at ${connector || "this site's /mcp address"} with session "g2". When a new voice question arrives, answer it in the language it was asked in, then call reply_to_g2 with the same utterance_id you received and your answer as text. Before slow work such as searching or using tools, first call acknowledge_g2_utterance with the same utterance_id and a short note, in your own words, about what you are going to do; don't send a formulaic "received" message. Don't tell me you're connected until an event has actually arrived.`,
 
     speechTitle: "Step 3: Turn on voice questions",
     speechBody:
@@ -210,6 +213,9 @@ const ko: Copy = {
     previewTitle: "미리보기 단계",
     previewBody: "안경으로 오는 Dot의 답변은 아직 실제 기기에서 확인 중이라, 일부 답변이 도착하지 않을 수 있습니다.",
     footer: "안경과 Dot을 잇는 가장 짧은 연결.",
+    policies: "정책",
+    privacy: "개인정보 처리방침 (Privacy)",
+    terms: "이용약관 (Terms)",
   },
   dashboard: {
     eyebrow: "내 연결",
@@ -278,7 +284,7 @@ const ko: Copy = {
     promptLabel: "Dot에 보낼 설정 요청",
     copyPrompt: "설정 요청 복사",
     dotPrompt: (connector) =>
-      `${connector || "이 사이트의 /mcp 주소"} 커넥터의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 질문을 받으면 질문한 언어로 답하고, reply_to_g2에 받은 것과 동일한 utterance_id와 답변을 text로 보내 줘. 이벤트가 실제로 도착하기 전에는 연결되었다고 말하지 마.`,
+      `${connector || "이 사이트의 /mcp 주소"} 커넥터의 "utterance.created" 이벤트를 session "g2"로 구독해 줘. 새 음성 질문을 받으면 질문한 언어로 답하고, reply_to_g2에 받은 것과 동일한 utterance_id와 답변을 text로 보내 줘. 검색이나 도구 사용처럼 시간이 걸리는 작업을 하기 전에는 먼저 acknowledge_g2_utterance에 같은 utterance_id와 무엇을 할지 직접 쓴 짧은 응답을 질문한 언어로 보내 줘. "접수했습니다" 같은 형식적인 문구는 보내지 마. 이벤트가 실제로 도착하기 전에는 연결되었다고 말하지 마.`,
 
     speechTitle: "3단계: 음성 질문 켜기",
     speechBody:

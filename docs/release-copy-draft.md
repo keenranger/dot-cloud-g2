@@ -1,5 +1,7 @@
 # Store and privacy copy — owner review draft
 
+> **2026-10-26:** the public policy text now lives at `/privacy` and `/terms` (see [release 0.5.1](release-0.5.1.md)). Privacy wording below is historical; where it differs, the published pages are current.
+
 **DRAFT — not published, not legally reviewed, not approved for public use.** Current production: Even Hub 0.4.2 (Private build) and a relay without retention/deletion. Local candidate: 0.5.0 (source base `a266438` plus local backend and companion changes; bounded corrected-source review clean; hosted validation pending; not deployed or uploaded). The owner approved public developer name keenranger and support/privacy email kghnkl0103@gmail.com on 2026-10-24; whether the portal shows telephone/address publicly remains unconfirmed. Native Sites publishing, Even Hub upload/update, beta promotion and review submission are not authorized for this candidate.
 
 Live portal state on 2026-10-24 (`outputs/release-readiness/environment-audit.md`): name `Lens MCP for G2`, tagline, permissions text and icon are present. Category is unset. Screenshots, cover, privacy/terms URLs and developer contact details are missing. No review build is selected and nothing is submitted.

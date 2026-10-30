@@ -68,8 +68,29 @@ a {
   letter-spacing: 2px;
 }
 .text-link {
+  white-space: nowrap;
   font-size: 12px;
   text-underline-offset: 4px;
+}
+.language-switch {
+  display: flex;
+  gap: 4px;
+  font-size: 12px;
+}
+.language-switch a {
+  display: inline-flex;
+  white-space: nowrap;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 16px;
+  color: var(--muted);
+  text-underline-offset: 4px;
+}
+.language-switch a[aria-current] {
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: underline;
 }
 .intro {
   padding: 74px 0 52px;
@@ -102,16 +123,33 @@ h1 span {
   flex-wrap: wrap;
   align-items: center;
   gap: 15px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   font-size: 12px;
 }
-.flow span:nth-child(even) {
-  color: #788578;
+.flow li {
+  display: flex;
+  align-items: center;
+  gap: 15px;
 }
-.flow span:nth-child(odd) {
+.flow li span {
   background: #e9ede3;
   border: 1px solid #dde3d6;
   padding: 5px 12px;
   border-radius: 20px;
+}
+/* Decorative arrow between steps; the list order already conveys the sequence. */
+.flow li + li::before {
+  content: "→" / "";
+  color: #788578;
+}
+.intro-needs {
+  max-width: 640px;
+  margin: 22px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
 }
 .signin-panel {
   background: #fff;
@@ -346,6 +384,19 @@ textarea {
 .notice p {
   margin: 5px 0 0;
 }
+.notice h3 {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin: 0;
+}
+.setup-steps {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0 0 16px;
+  padding-left: 20px;
+}
 .last-step {
   display: flex;
   align-items: flex-start;
@@ -384,13 +435,26 @@ textarea {
     padding: 0 22px;
   }
   .site-header {
-    height: 78px;
-    gap: 12px;
+    height: auto;
+    min-height: 78px;
+    padding: 16px 0;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .brand {
+    flex-basis: 100%;
+    white-space: nowrap;
+  }
+  .language-switch a {
+    padding: 0 6px;
   }
   .header-note {
     display: none;
   }
-  .text-link {
+  .language-switch {
+    margin-left: 0;
+  }
+  .site-header > .text-link {
     margin-left: auto;
   }
   .intro {
@@ -440,7 +504,10 @@ textarea {
     gap: 7px;
     font-size: 10px;
   }
-  .flow span:nth-child(odd) {
+  .flow li {
+    gap: 7px;
+  }
+  .flow li span {
     padding: 5px 9px;
   }
 }
@@ -453,7 +520,8 @@ textarea {
 .address-field {
   margin: 18px 0;
 }
-.address-field label {
+.address-field label,
+.field-label {
   display: block;
   font-size: 12px;
   margin-bottom: 8px;
@@ -492,4 +560,45 @@ textarea {
   flex-basis: 100%;
   margin: 0;
   font-size: 12px;
+}
+
+.policy {
+  max-width: 720px;
+  padding: 48px 0 56px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.policy h1 {
+  font-size: clamp(30px, 4vw, 40px);
+  letter-spacing: -1px;
+}
+.policy-meta {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 10px 0 32px;
+}
+.policy h2 {
+  font-size: 20px;
+  margin: 36px 0 10px;
+}
+.policy ul {
+  padding-left: 20px;
+}
+.policy li + li {
+  margin-top: 8px;
+}
+.policy a {
+  text-underline-offset: 3px;
+}
+.policy-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.policy-links a {
+  text-underline-offset: 4px;
+}
+footer {
+  flex-wrap: wrap;
+  gap: 12px 24px;
 }

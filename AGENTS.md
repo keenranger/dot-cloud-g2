@@ -9,7 +9,7 @@ Operational guide for agents working in this repository. Product and security de
 | Source repository | `origin` = `https://github.com/keenranger/dot-cloud-g2.git` (public), branch `main` |
 | Sites project | `appgprj_6adb099c2f588191a35d9749cda26f1f` (recorded in `.openai/hosting.json`) |
 | Relay public URL | `https://hey-dots-g2.keenranger.chatgpt.site` (MCP endpoint: `/mcp`) |
-| Even Hub app | package ID `app.mark.evendotscloud`, portal display name `Lens MCP for G2` (observed 2026-10-24), manifest name `Lens MCP for G2` (builds through 0.4.0: `Dot Cloud`) |
+| Even Hub app | package ID `app.mark.evendotscloud`, portal display name `Lens MCP for G2` (observed 2026-10-24), manifest name `Dots Lens for G2` (source after 0.5.0; 0.4.1–0.5.0 builds: `Lens MCP for G2`; builds through 0.4.0: `Dot Cloud`) |
 | Even Hub portal | `https://hub.evenrealities.com/hub/app.mark.evendotscloud/store-listing` |
 
 ## Publishing authorization

@@ -3,7 +3,11 @@ export interface Reply {
   text: string;
   createdAt: string;
   utterance_id?: string;
+  /** An acknowledgement the model wrote before working, or the final answer; a reply without a stage is final. */
+  stage?: "ack" | "final";
 }
+/** The utterance a final answer completes; acknowledgements and proactive messages complete none. */
+const answers = (item: Reply): string | undefined => (item.stage === "ack" ? undefined : item.utterance_id);
 
 /** Preserve the reader's place while retaining a bounded, deduplicated reply history. */
 export class MessageHistory {
@@ -23,6 +27,12 @@ export class MessageHistory {
   get selected(): Reply | undefined {
     return this.items[this.index];
   }
+  /**
+   * An acknowledgement and its final answer are two entries that both stay readable: neither replaces the other. An
+   * acknowledgement that arrives after its final (a capped or out-of-order batch) is placed just before that final, so
+   * an utterance always reads acknowledgement then final. A reader at the tail follows new entries; a reader elsewhere
+   * keeps their place.
+   */
   receive(batch: readonly Reply[]): boolean {
     const old = this.selected;
     const following = !old || this.index === this.items.length - 1;
@@ -33,12 +43,25 @@ export class MessageHistory {
       return true;
     });
     if (!additions.length) return false;
-    this.items = [...this.items, ...additions].slice(-this.capacity);
+    const items = [...this.items];
+    for (const item of additions) {
+      const final = item.stage === "ack" ? items.findIndex((kept) => answers(kept) === item.utterance_id) : -1;
+      if (final >= 0) items.splice(final, 0, item);
+      else items.push(item);
+    }
+    this.items = items.slice(-this.capacity);
     if (following) this.selectedId = this.items.at(-1)?.message_id;
     else if (!this.items.some((item) => item.message_id === this.selectedId))
       this.selectedId = this.items[0]?.message_id;
     this.revision++;
     return this.selected?.message_id !== old?.message_id;
+  }
+  /** Whether the other stage of this reply's utterance is kept here: an acknowledgement's final, or a final's acknowledgement. */
+  paired(reply: Reply): boolean {
+    if (!reply.utterance_id) return false;
+    return reply.stage === "ack"
+      ? this.items.some((item) => answers(item) === reply.utterance_id)
+      : this.items.some((item) => item.stage === "ack" && item.utterance_id === reply.utterance_id);
   }
   move(delta: number): boolean {
     const next = Math.max(0, Math.min(this.items.length - 1, this.index + delta));

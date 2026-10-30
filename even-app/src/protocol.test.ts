@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DISPLAY_LIMIT, boundaryStep, pairCode, relayOrigin, segmentContent, segments, wav } from "./protocol.ts";
+import {
+  DISPLAY_LIMIT,
+  KOREAN_MARKERS,
+  boundaryStep,
+  pairCode,
+  relayOrigin,
+  segmentContent,
+  segments,
+  wav,
+} from "./protocol.ts";
 test("relay accepts only HTTPS origins without embedded credentials or paths", () => {
   assert.equal(relayOrigin("https://relay.example"), "https://relay.example");
   for (const origin of [
@@ -73,4 +82,16 @@ test("pairing codes tolerate pasted spaces and capitalization but nothing else",
   const code = "ab".repeat(32);
   assert.equal(pairCode(` ${code.slice(0, 10)} ${code.slice(10).toUpperCase()}\n`), code);
   for (const bad of ["", code.slice(1), code + "a", "g".repeat(64)]) assert.throws(() => pairCode(bad), /64자리/);
+});
+
+test("parts split for several marker sets fit whichever set they are shown with", () => {
+  const english = { continues: "\n(continues)", continued: "(continued)\n" };
+  for (const text of ["a".repeat(5000), "한글😀".repeat(1000), "word ".repeat(900)]) {
+    const parts = segments(text, [english, KOREAN_MARKERS]);
+    assert.equal(parts.join(""), text);
+    for (const markers of [english, KOREAN_MARKERS])
+      for (let i = 0; i < parts.length; i++) assert.ok(segmentContent(parts, i, markers).length <= DISPLAY_LIMIT);
+    assert.match(segmentContent(parts, 0, english), /\n\(continues\)$/);
+    assert.match(segmentContent(parts, parts.length - 1, english), /^\(continued\)\n/);
+  }
 });

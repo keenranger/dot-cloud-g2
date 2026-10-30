@@ -144,3 +144,112 @@ test("a retention cutoff drops only known replies it has expired, never moves ba
   history.receive([at("old", "2026-09-20T00:00:00.000Z")]);
   assert.equal(history.messages.length, 1, "a new connection starts without a cutoff");
 });
+const staged = (utterance: string, stage: "ack" | "final", createdAt = "2026-10-26T00:00:00Z") => ({
+  message_id: `${stage === "ack" ? "ack" : "reply"}_${utterance}`,
+  utterance_id: utterance,
+  stage,
+  text: `${stage} ${utterance}`,
+  createdAt,
+});
+const ids = (history: MessageHistory) => history.messages.map((item) => item.message_id);
+test("an acknowledgement stays readable before its final, and replays add nothing", () => {
+  const history = new MessageHistory();
+  history.receive([reply("a")]);
+  assert.equal(history.receive([staged("u", "ack")]), true);
+  assert.equal(history.selected?.message_id, "ack_u");
+  assert.equal(history.paired(history.selected!), false, "no final is kept yet");
+  assert.equal(history.receive([staged("u", "ack"), staged("u", "final")]), true);
+  assert.deepEqual(ids(history), ["a", "ack_u", "reply_u"]);
+  assert.equal(history.selected?.message_id, "reply_u", "a reader at the tail follows the final");
+  assert.deepEqual(
+    history.messages.map((item) => item.text),
+    ["reply a", "ack u", "final u"],
+    "the intermediate text is never replaced",
+  );
+  assert.equal(history.paired(history.messages[1]!), true);
+  assert.equal(history.paired(history.messages[2]!), true);
+  assert.equal(history.paired(history.messages[0]!), false);
+  // Duplicate polls carrying either stage again change nothing.
+  const revision = history.revision;
+  assert.equal(history.receive([staged("u", "ack")]), false);
+  assert.equal(history.receive([staged("u", "ack"), staged("u", "final")]), false);
+  assert.equal(history.revision, revision);
+  assert.deepEqual(ids(history), ["a", "ack_u", "reply_u"]);
+  history.move(-1);
+  assert.equal(history.selected?.text, "ack u", "native message navigation reaches the acknowledgement");
+});
+test("an acknowledgement and its final in one batch are both kept in order", () => {
+  const history = new MessageHistory();
+  assert.equal(history.receive([staged("u", "ack"), staged("u", "final")]), true);
+  assert.deepEqual(ids(history), ["ack_u", "reply_u"]);
+  assert.equal(history.selected?.message_id, "reply_u");
+  // A final carried without a stage (an older relay) pairs with an acknowledgement too.
+  history.receive([staged("v", "ack")]);
+  history.receive([{ message_id: "reply_v", utterance_id: "v", text: "legacy", createdAt: "2026-10-26T00:00:01Z" }]);
+  assert.deepEqual(ids(history), ["ack_u", "reply_u", "ack_v", "reply_v"]);
+  assert.equal(history.paired(history.selected!), true);
+});
+test("an acknowledgement that arrives after its final is placed before it, and the reader stays", () => {
+  const history = new MessageHistory();
+  history.receive([reply("a"), staged("u", "final")]);
+  assert.equal(history.selected?.message_id, "reply_u");
+  assert.equal(history.receive([staged("u", "ack")]), false, "the reader at the tail keeps the final");
+  assert.deepEqual(ids(history), ["a", "ack_u", "reply_u"]);
+  assert.equal(history.selected?.message_id, "reply_u");
+  // Within one batch, the final listed first still reads after its acknowledgement.
+  const reversed = new MessageHistory();
+  reversed.receive([staged("w", "final"), staged("w", "ack")]);
+  assert.deepEqual(ids(reversed), ["ack_w", "reply_w"]);
+  assert.equal(reversed.selected?.message_id, "reply_w");
+});
+test("a reader on an older reply keeps it while an acknowledgement is joined by its final", () => {
+  const history = new MessageHistory();
+  history.receive([reply("a"), staged("u", "ack")]);
+  history.move(-1);
+  assert.equal(history.receive([staged("u", "final")]), false);
+  assert.equal(history.selected?.message_id, "a");
+  assert.deepEqual(ids(history), ["a", "ack_u", "reply_u"]);
+});
+test("a reader on an acknowledgement behind newer messages keeps it when its final arrives", () => {
+  const history = new MessageHistory();
+  history.receive([staged("u", "ack"), reply("b")]);
+  history.move(-1);
+  assert.equal(history.selected?.message_id, "ack_u");
+  assert.equal(history.paired(history.selected!), false);
+  assert.equal(history.receive([staged("u", "final")]), false, "the body being read stays");
+  assert.equal(history.selected?.message_id, "ack_u");
+  assert.equal(history.paired(history.selected!), true, "the label can now say the final is kept");
+  assert.deepEqual(ids(history), ["ack_u", "b", "reply_u"]);
+});
+test("acknowledgements of different utterances are kept apart", () => {
+  const history = new MessageHistory();
+  history.receive([staged("u", "ack"), staged("v", "ack")]);
+  history.receive([staged("v", "final")]);
+  assert.deepEqual(ids(history), ["ack_u", "ack_v", "reply_v"]);
+  assert.equal(history.paired(history.messages[0]!), false);
+  // A proactive message and a reply without an utterance pair with nothing.
+  assert.equal(history.paired({ message_id: "m", text: "m", createdAt: "2026-10-26T00:00:00Z" }), false);
+});
+test("both stages count toward the cap, which evicts the oldest entry first, and expire on their own timestamps", () => {
+  const history = new MessageHistory(3);
+  history.receive([
+    reply("a"),
+    staged("u", "ack", "2026-10-26T00:00:01Z"),
+    staged("u", "final", "2026-10-26T00:00:02Z"),
+  ]);
+  history.receive([reply("b")]);
+  assert.deepEqual(ids(history), ["ack_u", "reply_u", "b"]);
+  history.receive([reply("c")]);
+  assert.deepEqual(ids(history), ["reply_u", "b", "c"], "the acknowledgement is older than its final");
+  assert.equal(history.paired(history.messages[0]!), false);
+  const expiring = new MessageHistory();
+  expiring.receive([staged("u", "ack", "2026-09-01T00:00:00Z"), staged("u", "final", "2026-09-01T00:00:05Z")]);
+  assert.equal(expiring.expire("2026-09-01T00:00:01Z"), true);
+  assert.deepEqual(ids(expiring), ["reply_u"]);
+  assert.equal(expiring.receive([staged("u", "ack", "2026-09-01T00:00:00Z")]), false, "an expired stage stays gone");
+  const erased = new MessageHistory();
+  erased.observe(1);
+  erased.receive([staged("u", "ack"), staged("u", "final")]);
+  assert.equal(erased.observe(2), "erased");
+  assert.deepEqual(ids(erased), [], "an owner deletion takes both stages");
+});

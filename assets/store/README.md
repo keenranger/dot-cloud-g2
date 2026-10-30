@@ -1,4 +1,4 @@
-# Lens MCP for G2 release artwork
+# Dots Lens for G2 release artwork
 
 Original icon and cover prepared 2026-10-23. No third-party logo, product photograph or official-brand mark is included.
 

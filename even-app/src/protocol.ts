@@ -19,14 +19,22 @@ export function pairCode(value: string): string {
 // the bound. A text container with `isEventCapture: 1` scrolls overflowing text natively on G2, so a reply is split
 // only when it cannot fit in one update.
 export const DISPLAY_LIMIT = 2000;
-const CONTINUES = "\n(계속)";
-const CONTINUED = "(이어서)\n";
+/** What marks a split reply on G2: `continues` ends every part but the last, `continued` starts every part but the first. */
+export interface SplitMarkers {
+  continues: string;
+  continued: string;
+}
+export const KOREAN_MARKERS: SplitMarkers = { continues: "\n(계속)", continued: "(이어서)\n" };
 const highSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
-/** Split text into the fewest parts that each fit one display update, preferring line, then word breaks. */
-export function segments(text: string): string[] {
+/**
+ * Split text into the fewest parts that each fit one display update, preferring line, then word breaks. Each part
+ * leaves room for the longest of `markers`, so it fits whichever of them it is later shown with.
+ */
+export function segments(text: string, markers: readonly SplitMarkers[] = [KOREAN_MARKERS]): string[] {
   const value = text || " ";
   if (value.length <= DISPLAY_LIMIT) return [value];
-  const budget = DISPLAY_LIMIT - CONTINUED.length - CONTINUES.length;
+  const longest = (key: keyof SplitMarkers) => Math.max(...markers.map((marker) => marker[key].length));
+  const budget = DISPLAY_LIMIT - longest("continued") - longest("continues");
   const result: string[] = [];
   let start = 0;
   while (start < value.length) {
@@ -47,8 +55,8 @@ export function segments(text: string): string[] {
   return result;
 }
 /** The G2 text for one part, marking continuation only when a reply needed more than one update. */
-export function segmentContent(parts: readonly string[], index: number): string {
-  return `${index > 0 ? CONTINUED : ""}${parts[index]}${index < parts.length - 1 ? CONTINUES : ""}`;
+export function segmentContent(parts: readonly string[], index: number, markers = KOREAN_MARKERS): string {
+  return `${index > 0 ? markers.continued : ""}${parts[index]}${index < parts.length - 1 ? markers.continues : ""}`;
 }
 /** Where a G2 scroll boundary event leads: the adjacent part of a split reply, else the adjacent message. */
 export function boundaryStep(part: number, count: number, delta: number): { part: number } | { message: number } {

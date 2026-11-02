@@ -1,13 +1,13 @@
 {
   "name": "even-g2-dots-cloud-companion",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "packageManager": "pnpm@12.14.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "test": "node --experimental-strip-types --test src/*.test.ts",
+    "test": "node --experimental-strip-types --test src/*.test.ts scripts/*.test.mjs",
     "lint": "oxlint src",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "format": "oxfmt .",

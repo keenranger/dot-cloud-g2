@@ -61,6 +61,8 @@ stat -f %z outputs/dot-cloud-<version>.ehpk
 ```
 
 - Run `pack` from the repository root. `RELAY_ORIGIN` must be the exact HTTPS origin with no path; `manifest` writes the git-ignored `even-app/app.json`.
+- Do not ship dummy or example URLs in executable code or UI assets, including input placeholders, default values, help text and links. Use plain descriptive text or an actual approved service URL. Reviewers can detect literal URLs even when the app never requests them.
+- After every candidate build, run `manifest` with the production relay origin before `pack` and require its bundle URL/`network.whitelist` check to pass. Never package an earlier manifest after a failed check. Remove accidental URL references; do not add fake domains, wildcards or unused services to the whitelist to silence validation. Required license/provenance notices remain intact and are distinct from runtime network references.
 - The version is hard-coded in `even-app/scripts/manifest.mjs` and `even-app/package.json`. Update both for a release. Routine version bumps within an authorized release need no separate approval.
 - Before relying on a CLI flag, confirm it with `evenhub <command> --help`.
 

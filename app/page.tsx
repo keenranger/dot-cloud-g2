@@ -1,20 +1,30 @@
-import { cookies } from "next/headers";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { chatGPTSignInPath, chatGPTSignOutPath, getChatGPTUser } from "./chatgpt-auth";
 import Dashboard from "./components/dashboard";
 import LanguageSwitch from "./components/language-switch";
 import { PolicyLinks } from "./components/policy-page";
-import { LOCALE_COOKIE, PRODUCT_NAME, copy, localePath, resolveLocale } from "./i18n/dashboard";
+import SupportLinks from "./components/support-links";
+import { PRODUCT_NAME, copy, localePath } from "./i18n/dashboard";
+import { requestLocale } from "./i18n/request-locale";
+import { langTag } from "@/lib/locale";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | string[]>> }) {
-  // An explicit ?lang= wins, then the saved choice, then English.
-  const locale = resolveLocale((await searchParams).lang, (await cookies()).get(LOCALE_COOKIE)?.value);
+type Props = { searchParams: Promise<Record<string, string | string[]>> };
+
+export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
+  const t = copy[await requestLocale(searchParams)].page;
+  return { title: `${PRODUCT_NAME} — ${t.metaTitle}`, description: t.metaDescription };
+}
+
+export default async function Home({ searchParams }: Props) {
+  // An explicit ?lang= wins, then the saved choice, then the browser's languages, then English.
+  const locale = await requestLocale(searchParams);
   const t = copy[locale].page;
   const user = await getChatGPTUser();
   return (
-    <div className="shell" lang={locale}>
+    <div className="shell" lang={langTag(locale)}>
       <header className="site-header">
         <Link className="brand" href={localePath(locale)} aria-label={t.home}>
           <span className="brand-mark" aria-hidden="true">
@@ -23,7 +33,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
           {PRODUCT_NAME}
         </Link>
         <span className="header-note">{t.headerNote}</span>
-        <LanguageSwitch locale={locale} />
+        <LanguageSwitch locale={locale} action="/" />
         {user && (
           <a className="text-link" href={chatGPTSignOutPath(localePath(locale))} target="_top">
             {t.signOut}
@@ -72,7 +82,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       <footer>
         <span>{PRODUCT_NAME}</span>
         <span>{t.footer}</span>
-        <PolicyLinks label={t.policies} privacy={t.privacy} terms={t.terms} />
+        <PolicyLinks locale={locale} />
+        <SupportLinks t={t} />
       </footer>
     </div>
   );

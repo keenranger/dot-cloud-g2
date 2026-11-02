@@ -1,10 +1,15 @@
 // Retention and owner deletion run against the real D1 migrations; time is injected, never read from the clock.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { database } from "./helpers/d1.mjs";
+import { signedHeaders } from "../lib/relay/core.ts";
 import { D1Store } from "../lib/relay/store.ts";
 import { TestRelay } from "./helpers/relay.mjs";
+
+// Synthetic, deterministic test bytes only; never provisioned by a service or used in production.
+const signingBytes = Buffer.alloc(32, 7);
+const signingSecret = `whsec_${signingBytes.toString("base64")}`;
 
 const DAY = 86_400_000;
 const T0 = Date.parse("2026-11-01T00:00:00.000Z");
@@ -15,7 +20,12 @@ function harness() {
   const clock = { now: T0 };
   const sent = [];
   let onTransport = async () => {};
-  const transport = async (_destination, id, payload) => {
+  const transport = async (destination, id, payload) => {
+    const body = JSON.stringify(payload);
+    const timestamp = Math.floor(clock.now / 1000);
+    const headers = await signedHeaders(destination.secret, id, body, timestamp);
+    const expected = createHmac("sha256", signingBytes).update(`${id}.${timestamp}.${body}`).digest("base64");
+    assert.equal(headers["webhook-signature"], `v1,${expected}`);
     sent.push({ id, payload });
     await onTransport(payload);
     return { status: 202, body: "" };
@@ -46,7 +56,7 @@ function harness() {
         value: JSON.stringify({
           id: "sub_test",
           url: "https://connectors.api.openai.com/test",
-          secret: "whsec_dGVzdHRlc3R0ZXN0dGVzdHRlc3R0ZXN0",
+          secret: signingSecret,
           expiresAt: T0 + 365 * DAY,
         }),
         expires_at: T0 + 365 * DAY,

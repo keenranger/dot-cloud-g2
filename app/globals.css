@@ -74,23 +74,36 @@ a {
 }
 .language-switch {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
 }
-.language-switch a {
-  display: inline-flex;
-  white-space: nowrap;
-  align-items: center;
-  min-height: 32px;
-  padding: 0 10px;
-  border-radius: 16px;
-  color: var(--muted);
-  text-underline-offset: 4px;
+.site-header > .brand + .language-switch {
+  margin-left: auto;
 }
-.language-switch a[aria-current] {
+.language-switch label {
+  color: var(--muted);
+}
+.language-switch select,
+.language-switch button {
+  min-height: 32px;
+  border: 1px solid #cdd6cb;
+  border-radius: 8px;
+  background: #fff;
   color: var(--ink);
-  font-weight: 700;
-  text-decoration: underline;
+  font: inherit;
+}
+.language-switch select {
+  max-width: 11em;
+  padding: 0 8px;
+}
+.language-switch button {
+  padding: 0 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.language-switch button:hover {
+  background: #eef2ea;
 }
 .intro {
   padding: 74px 0 52px;
@@ -445,9 +458,6 @@ textarea {
     flex-basis: 100%;
     white-space: nowrap;
   }
-  .language-switch a {
-    padding: 0 6px;
-  }
   .header-note {
     display: none;
   }
@@ -494,6 +504,13 @@ textarea {
   .pending-badge {
     margin-left: 28px;
   }
+  /* The full key or address gets its own row; its buttons wrap below it. */
+  .code-row {
+    flex-wrap: wrap;
+  }
+  .code-row input {
+    flex-basis: 100%;
+  }
   footer {
     gap: 20px;
   }
@@ -533,11 +550,21 @@ textarea {
 }
 .device-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
   padding: 20px 0;
   border-bottom: 1px solid var(--line);
+}
+/* The description keeps a readable width; actions drop below it when the row is too narrow. */
+.device-actions > :first-child {
+  flex: 1 1 16rem;
+}
+.device-actions > div + div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .device-actions p {
   color: var(--muted);
@@ -560,6 +587,14 @@ textarea {
   flex-basis: 100%;
   margin: 0;
   font-size: 12px;
+}
+/* Long translated labels wrap instead of setting the card's min-content width. */
+.setup-card > .button,
+.pairing-actions .button,
+.pairing-confirm .button,
+.device-actions .button {
+  white-space: normal;
+  text-align: center;
 }
 
 .policy {
@@ -595,8 +630,25 @@ textarea {
   flex-wrap: wrap;
   gap: 16px;
 }
-.policy-links a {
+.policy-links a,
+.support-links a {
   text-underline-offset: 4px;
+}
+.support-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.notice-page {
+  padding: 74px 0 52px;
+}
+.notice-page p {
+  color: var(--muted);
+}
+.notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 footer {
   flex-wrap: wrap;

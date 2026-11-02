@@ -27,3 +27,11 @@ Native browser verification used a frozen source export, isolated dependencies a
 `outputs/dot-cloud-0.8.0.ehpk` was built with SDK 0.0.16 and minimum Even app 2.2.10. Size: 7,610,160 bytes. SHA-256: `887730e5cca2968f1b938375b067ce6b9e2c1be1c049f3bf688457fee1eafeb0`.
 
 The first CLI packaging attempt rejected a network permission description longer than 300 characters. The description was shortened without changing destinations or data handling; manifest validation and CLI packaging then passed. Upload requires a currently authenticated Even CLI session; packaging alone does not establish upload or review status.
+
+## Publication record (2026-11-02)
+
+- Reviewed, GPG-signed source: `18c47fe7c90f4dc7a331efd429a855719fcda41b`. GitHub branch `fix/bundle-network-whitelist` was pushed and PR [#11](https://github.com/keenranger/dot-cloud-g2/pull/11) opened against `main`; it was not merged. GitHub reported no automated checks for the branch, so local checks must not be described as CI results.
+- The native Sites workflow built and pushed the same source, saved version 13 and completed deployment `appgdep_6ae83d2ceb9081919351235671c5d542` successfully at `https://hey-dots-g2.keenranger.chatgpt.site`. The existing public audience and project identity were preserved. Deployment archive SHA-256: `ecebf51963867ccf99a68a31c4dfaa046575c8f80537bd0246772b1252fdb558`.
+- Anonymous HTTP checks with the native curl client passed all 24 combinations of eight languages and home/privacy/terms: HTTP success, expected scoped language and the exact GitHub Issues destination. An earlier Python urllib request received HTTP 403; it was retained as a client-specific observation. These are response checks, not hosted browser, authenticated-account or cross-app proof.
+- After interactive CLI login renewal, `evenhub upload` created build **130157**, version **0.8.0**, status **Private**, size **7,610,160 bytes**. A separate `evenhub ls` read-back confirmed version, size, status and empty channels. The previously public version was 0.6.3; the rejected 0.7.0 remained unchanged.
+- Private upload does not establish public review or publication. The CLI supports upload; public review/public publishing is a portal operation. Any later review submission must be recorded from its own confirmed result.

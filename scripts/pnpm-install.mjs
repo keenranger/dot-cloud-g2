@@ -234,7 +234,7 @@ async function main() {
       accessSync("node_modules/.bin/vinext", constants.X_OK);
       const lock = readFileSync("pnpm-lock.yaml");
       writeFileSync("node_modules/.sites-install.json", `${JSON.stringify({
-        package_manager: "pnpm@11.25.0",
+        package_manager: "pnpm@12.21.0",
         lockfile_sha256: createHash("sha256").update(lock).digest("hex"),
         node: process.version,
         platform: `${process.platform}-${process.arch}`,

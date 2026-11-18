@@ -1,24 +1,23 @@
-// Copy for the sign-in page and dashboard. English is the default; Korean is chosen with ?lang=ko or the saved
-// preference. Keep both locales in step: every key exists in each.
+// Copy for every page of the site. English is the default; the language is chosen by lib/locale.ts. Keep every
+// language in step: each key exists in each (the `Copy` type and tests/web-locale.test.mjs check it).
+import { LOCALES, type Locale } from "../../lib/locale";
+import { PRODUCT_NAME } from "./product";
+import { de } from "./copy/de";
+import { es } from "./copy/es";
+import { fr } from "./copy/fr";
+import { it } from "./copy/it";
+import { ja } from "./copy/ja";
+import { zh } from "./copy/zh";
 
-// Provisional product name; change it here only.
-export const PRODUCT_NAME = "Dots Lens for G2";
-
-export const locales = ["en", "ko"] as const;
-export type Locale = (typeof locales)[number];
+export { PRODUCT_NAME, LOCALES, type Locale };
 export const LOCALE_COOKIE = "lang";
-
-export function resolveLocale(...candidates: (string | string[] | null | undefined)[]): Locale {
-  for (const candidate of candidates) {
-    const value = Array.isArray(candidate) ? candidate[0] : candidate;
-    if (value && (locales as readonly string[]).includes(value)) return value as Locale;
-  }
-  return "en";
-}
 
 // The page path that keeps the language through sign-in, sign-out and reloads.
 export function localePath(locale: Locale) {
   return `/?lang=${locale}`;
+}
+export function policyPath(page: "privacy" | "terms", locale: Locale) {
+  return `/${page}?lang=${locale}`;
 }
 
 export type DeliveryCategory =
@@ -57,6 +56,29 @@ const en = {
     policies: "Policies",
     privacy: "Privacy Notice",
     terms: "Terms of Use",
+    apply: "Apply",
+    support: "Help and feedback",
+    supportGuide: "Usage guide and source code on GitHub",
+    supportIssues: "Questions and feature requests on GitHub Issues",
+    newTab: "(opens in a new tab)",
+    metaTitle: "ChatGPT Dot on your G2 glasses",
+    metaDescription: "Talk to your ChatGPT Dot from Even G2 and read the replies on your glasses.",
+  },
+  policy: {
+    formerly: "formerly Lens MCP for G2",
+    effective: "Effective",
+    englishVersion: "English version",
+  },
+  notFound: {
+    title: "Page not found",
+    body: "This page doesn't exist or has moved.",
+    home: "Go to the home page",
+  },
+  error: {
+    title: "Something went wrong",
+    body: "This page couldn't be shown. Try again, or go to the home page. If it keeps happening, let us know through GitHub Issues.",
+    retry: "Try again",
+    home: "Go to the home page",
   },
   dashboard: {
     eyebrow: "YOUR CONNECTION",
@@ -214,8 +236,31 @@ const ko: Copy = {
     previewBody: "안경으로 오는 Dot의 답변은 아직 실제 기기에서 확인 중이라, 일부 답변이 도착하지 않을 수 있습니다.",
     footer: "안경과 Dot을 잇는 가장 짧은 연결.",
     policies: "정책",
-    privacy: "개인정보 처리방침 (Privacy)",
-    terms: "이용약관 (Terms)",
+    privacy: "개인정보 처리방침",
+    terms: "이용약관",
+    apply: "적용",
+    support: "도움말과 의견",
+    supportGuide: "GitHub에서 사용 안내와 소스 코드 보기",
+    supportIssues: "GitHub Issues에서 질문과 기능 요청하기",
+    newTab: "(새 탭에서 열림)",
+    metaTitle: "G2 안경에서 쓰는 ChatGPT Dot",
+    metaDescription: "Even G2에서 ChatGPT Dot에게 말하고 답변을 안경에서 읽으세요.",
+  },
+  policy: {
+    formerly: "이전 이름 Lens MCP for G2",
+    effective: "시행일",
+    englishVersion: "영어 원문 보기",
+  },
+  notFound: {
+    title: "페이지를 찾을 수 없습니다",
+    body: "이 페이지는 없거나 다른 곳으로 옮겨졌습니다.",
+    home: "홈으로 가기",
+  },
+  error: {
+    title: "문제가 발생했습니다",
+    body: "이 페이지를 표시하지 못했습니다. 다시 시도하거나 홈으로 이동해 주세요. 문제가 계속되면 GitHub Issues로 알려 주세요.",
+    retry: "다시 시도",
+    home: "홈으로 가기",
   },
   dashboard: {
     eyebrow: "내 연결",
@@ -343,4 +388,4 @@ const ko: Copy = {
   },
 };
 
-export const copy: Record<Locale, Copy> = { en, ko };
+export const copy: Record<Locale, Copy> = { en, de, fr, es, it, zh, ja, ko };

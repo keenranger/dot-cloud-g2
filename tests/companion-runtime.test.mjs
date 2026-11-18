@@ -11,6 +11,7 @@ const PREFS = "dot-cloud-preferences-v1";
 const LANGUAGE = "dot-cloud-language-v1";
 const EVENT = {
   SCROLL_TOP: 1,
+  SCROLL_BOTTOM: 2,
   DOUBLE_CLICK: 3,
   ENTER: 4,
   LEAVE: 5,
@@ -107,11 +108,20 @@ async function boot(options = {}) {
   h.get("origin").value = "https://hey-dots-g2.keenranger.chatgpt.site";
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { language: options.locale ?? "en-US", clipboard: { writeText: options.copy ?? (async () => {}) } },
+    value: {
+      language: options.locale ?? "en-US",
+      languages: options.languages,
+      clipboard: { writeText: options.copy ?? (async () => {}) },
+    },
   });
   // index.html ships both voice preferences checked.
   h.get("wake-enabled").checked = true;
   h.get("auto-send").checked = true;
+  // Picks from the native language list as the page's change event does.
+  h.choose = (value) => {
+    h.get("language").value = value;
+    h.get("language").onchange();
+  };
   h.flush = async () => {
     for (let i = 0; i < 80; i++) await Promise.resolve();
   };
@@ -123,7 +133,8 @@ async function boot(options = {}) {
     await h.flush();
   };
   const host = {
-    async createStartUpPageContainer() {
+    async createStartUpPageContainer(page) {
+      h.startup = page;
       if (options.holdStartup) return new Promise((resolve) => (h.settleStartup = () => resolve(0)));
       return 0;
     },
@@ -152,7 +163,7 @@ async function boot(options = {}) {
     },
     async shutDownPageContainer(mode) {
       h.shutdown.push(mode);
-      return true;
+      return options.shutdown ? options.shutdown(mode) : true;
     },
   };
   globalThis.document = {
@@ -455,12 +466,12 @@ test("an unconfirmed G2 microphone stop is retried before any reopen, on resume 
     h.audioResults.push(false);
     await h.event(EVENT.LEAVE);
     assert.deepEqual(h.last(), { open: false, source: "glasses", ok: false });
-    assert.match(h.get("wake-status").textContent, /마이크 중지를 확인하지 못/);
+    assert.match(h.get("wake-status").textContent, /마이크가 아직 켜져 있을 수 있습니다/);
     // Resume retries the stop once; it fails again, so nothing opens.
     h.audioResults.push(false);
     await h.event(EVENT.ENTER);
     assert.equal(h.opens(), 1, "no reopen while the stop is unconfirmed");
-    assert.match(h.get("wake-status").textContent, /마이크 중지를 확인하지 못/);
+    assert.match(h.get("wake-status").textContent, /마이크가 아직 켜져 있을 수 있습니다/);
     const attempts = h.audio.length;
     // Nothing retries on its own: polling and timers leave the microphone alone.
     await h.fire(2500);
@@ -479,7 +490,7 @@ test("an unconfirmed G2 microphone stop is retried before any reopen, on resume 
     h.audioResults.push(false);
     await h.frame();
     await h.event(EVENT.RELEASE, "textEvent");
-    assert.match(h.get("status").textContent, /마이크 중지를 확인하지 못/);
+    assert.match(h.get("status").textContent, /마이크가 아직 켜져 있을 수 있습니다/);
     const afterManual = h.opens();
     h.get("text").value = "";
     h.get("text").oninput();
@@ -504,7 +515,11 @@ test("quiet for more than 20 seconds is only reported; later G2 frames, a cue an
     await h.fire(4000);
     // No frame yet is reported as unknown, on the phone and the G2 header, and nothing else changes.
     assert.match(h.get("wake-status").textContent, /G2 오디오 수신 확인 안 됨/);
-    assert.match(h.writes.filter((w) => w.containerID === 2).at(-1).content, /G2 오디오 수신 확인 안 됨/);
+    // G2 has room only for the short form, which still says the microphone is on.
+    assert.equal(
+      h.writes.filter((w) => w.containerID === 2).at(-1).content,
+      "마이크 켜짐 · Hey dots · 아직 오디오 없음",
+    );
     assert.equal(h.audio.length, 1, "quiet neither closes nor reopens the microphone");
     assert.equal(h.detectors.at(-1).disposed, false, "the detector keeps listening");
     assert.equal(h.timer(4000) ?? h.timer(6000), undefined, "an idle observation leaves no timer running");
@@ -708,7 +723,7 @@ test("an owner deletion clears old replies on the phone and G2, keeps the draft,
     assert.match(h.get("reply").textContent, /대화 기록이 삭제/);
     assert.match(h.get("status").textContent, /대화 기록이 삭제/);
     assert.match(bodyWrites(h).at(-1), /대화 기록이 삭제/, "G2 no longer shows the deleted reply");
-    assert.doesNotMatch(headerWrites(h).at(-1), /답변 \d/, "no stale position in the G2 header");
+    assert.doesNotMatch(headerWrites(h).at(-1), /^\d+\/\d+/, "no stale position in the G2 header");
     assert.equal(h.get("message-position").textContent, "아직 받은 메시지가 없습니다.");
     assert.equal(h.get("prev-message").disabled, true);
     assert.equal(h.get("next-message").disabled, true);
@@ -729,7 +744,7 @@ test("an owner deletion clears old replies on the phone and G2, keeps the draft,
     await h.fire(2500);
     assert.equal(h.get("reply").textContent, "삭제 후 새 답변");
     assert.equal(bodyWrites(h).at(-1), "삭제 후 새 답변");
-    assert.match(headerWrites(h).at(-1), /답변 1\/1/);
+    assert.match(headerWrites(h).at(-1), /^1\/1/);
     // Once a revision is known, a response without one is dropped whole, and the baseline still refuses older ones.
     server.revision = undefined;
     server.messages = [msg("old-1", "삭제 전 답변 하나"), msg("new-1", "삭제 후 새 답변")];
@@ -1477,7 +1492,7 @@ test("a single reply deferred behind Hey dots running text comes back when Hey d
     await turnOffWake(h);
     assert.equal(socket.closed, true);
     assert.equal(bodies(h).at(-1), "하나뿐인 답변", "the deferred reply takes the body instead of the instruction");
-    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.match(headers(h).at(-1), /^1\/1/);
     assert.match(h.get("status").textContent, /최신 답변/);
     const after = bodies(h).length;
     handler({ data: JSON.stringify({ tokens: [{ text: "늦은 말", is_final: false }] }) });
@@ -1686,7 +1701,7 @@ test("with auto-send off, a single reply deferred during a capture reaches G2 on
     await h.flush();
     assert.equal(h.posts.length, 0, "review mode does not submit");
     assert.equal(bodies(h).at(-1), "하나뿐인 답변", "the deferred reply takes the body on release");
-    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.match(headers(h).at(-1), /^1\/1/);
     assert.equal(h.get("text").value, "내일 일정 알려줘", "the transcript waits in the field");
     assert.match(h.get("status").textContent, /확인한 뒤 전송하세요/, "the phone keeps the review prompt");
     for (let i = 0; i < 2; i++) await h.fire(2500);
@@ -1788,7 +1803,7 @@ test("a reply written after a deletion during running text is deferred on G2 and
     await release(h, socket);
     assert.equal(server.posts.length, 1);
     assert.equal(bodies(h).at(-1), "삭제 후 새 답변", "the deferred reply comes back on submission");
-    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.match(headers(h).at(-1), /^1\/1/);
   } finally {
     h.restore();
   }
@@ -1935,7 +1950,7 @@ test("a reply written with a deletion during an automatic POST reaches G2 once t
     settle(Response.json({ status: "accepted" }));
     await h.flush();
     assert.equal(bodies(h).at(-1), "삭제 후 새 답변", "the deferred reply comes back on G2");
-    assert.match(headers(h).at(-1), /^답변 1\/1/);
+    assert.match(headers(h).at(-1), /^1\/1/);
     assert.match(h.get("status").textContent, /지워졌을 수 있습니다/, "the phone keeps the deletion warning");
     assert.equal(h.get("text").value, "");
     const writes = bodies(h).length;
@@ -2091,7 +2106,7 @@ test("dashboard follows validated custom origins and blocks unsafe destinations"
     h.get("origin").oninput();
     assert.equal(h.get("dashboard-link").href, "https://custom.example:8443/?lang=en");
     // The link carries the chosen language; the address shown and copied stays the origin.
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
     assert.equal(h.get("dashboard-link").href, "https://custom.example:8443/?lang=ko");
     assert.equal(h.get("dashboard-address").value, "https://custom.example:8443");
@@ -2146,26 +2161,64 @@ const shownText = (h) => [
   ...h.writes.map((write) => [`g2:${write.containerName}`, write.content]),
 ];
 
-test("English is the default, even on a Korean phone, across phone statuses and G2", async () => {
+const KANA = /[\u3040-\u30ff]/;
+
+test("without a saved choice the phone's language is selected in the list and applies across phone statuses and G2, and nothing is saved", async () => {
   const h = await boot({ storage: ready, locale: "ko-KR" });
   try {
     await h.fire(2500);
-    assert.equal(document.documentElement.lang, "en");
-    assert.match(h.get("status").textContent, /saved server connection/);
-    assert.match(h.get("message-position").textContent, /No messages yet/);
-    for (const [where, text] of shownText(h)) assert.ok(!HANGUL.test(text), `${where} is English: ${text}`);
+    assert.equal(document.documentElement.lang, "ko");
+    assert.equal(h.get("language").value, "ko", "the list selects Korean itself, not an automatic entry");
+    assert.ok(!h.elements.has("language-auto"), "there is no automatic option to name");
+    assert.equal(h.get("send").textContent, "Dot에 전송");
+    assert.match(h.get("status").textContent, /저장된 서버 연결을 사용합니다/);
+    assert.match(h.get("message-position").textContent, /아직 받은 메시지가 없습니다/);
+    assert.ok(HANGUL.test(h.writes.filter((w) => w.containerID === 2).at(-1).content), "G2 header is Korean");
     assert.ok(!h.storage.has(LANGUAGE), "nothing is saved until the user chooses");
   } finally {
     h.restore();
   }
+  // navigator.languages is preferred over navigator.language, regional variants match, and an unsupported first choice
+  // falls through to the next one.
+  const regional = await boot({ storage: ready, locale: "en-US", languages: ["pt-BR", "ja-JP", "en-US"] });
+  try {
+    assert.equal(document.documentElement.lang, "ja");
+    assert.equal(regional.get("language").value, "ja");
+    assert.equal(regional.get("record").textContent, "録音を開始");
+    assert.ok(KANA.test(regional.get("status").textContent));
+  } finally {
+    regional.restore();
+  }
+  for (const [languages, lang, send, code] of [
+    [["zh-CN"], "zh-Hans", "发送给 Dot", "zh"],
+    [["zh-TW", "fr-CA"], "fr", "Envoyer à Dot", "fr"],
+    [["de-AT"], "de", "An Dot senden", "de"],
+    [["sv-SE"], "en", "Send to Dot", "en"],
+  ]) {
+    const h = await boot({ storage: ready, languages });
+    try {
+      assert.equal(document.documentElement.lang, lang, languages.join());
+      assert.equal(h.get("language").value, code, languages.join());
+      assert.equal(h.get("send").textContent, send, languages.join());
+      assert.ok(!h.storage.has(LANGUAGE), "a detected language is not saved");
+    } finally {
+      h.restore();
+    }
+  }
+  const english = await boot({ storage: ready });
+  try {
+    for (const [where, text] of shownText(english)) assert.ok(!HANGUL.test(text), `${where} is English: ${text}`);
+  } finally {
+    english.restore();
+  }
 });
 
-test("the language switch applies at once, rewrites the G2 header and is remembered", async () => {
+test("the language list applies at once, rewrites the G2 header and is remembered", async () => {
   const h = await boot({ storage: ready });
   try {
     const header = () => h.writes.filter((w) => w.containerID === 2).at(-1)?.content;
     assert.ok(!HANGUL.test(header()));
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
     assert.equal(document.documentElement.lang, "ko");
     assert.equal(h.get("send").textContent, "Dot에 전송");
@@ -2174,25 +2227,130 @@ test("the language switch applies at once, rewrites the G2 header and is remembe
     assert.ok(HANGUL.test(h.get("wake-status").textContent));
     assert.ok(HANGUL.test(header()), "G2 header follows the choice");
     assert.deepEqual(h.storageWrites.at(-1), [LANGUAGE, "ko"]);
-    h.get("language-en").onchange();
+    h.choose("de");
+    await h.flush();
+    assert.equal(h.get("send").textContent, "An Dot senden");
+    assert.equal(h.get("language-label").textContent, "Sprache · Language");
+    assert.equal(h.get("language").value, "de");
+    assert.match(header(), /Mikrofon/, "G2 header is German");
+    assert.deepEqual(h.storageWrites.at(-1), [LANGUAGE, "de"]);
+    h.choose("en");
     await h.flush();
     assert.equal(h.get("send").textContent, "Send to Dot");
     assert.ok(!HANGUL.test(h.get("wake-status").textContent));
     assert.deepEqual(h.storageWrites.at(-1), [LANGUAGE, "en"]);
-    assert.equal(h.get("language-en").checked, true);
+    assert.equal(h.get("language").value, "en");
   } finally {
     h.restore();
   }
-  const again = await boot({ storage: { ...ready, [LANGUAGE]: "ko" } });
+  // An explicit choice outlives the phone's language; the list shows it after the saved value is read.
+  const again = await boot({ storage: { ...ready, [LANGUAGE]: "ko" }, locale: "fr-FR" });
   try {
-    assert.equal(again.get("language-ko").checked, true);
+    assert.equal(again.get("language").value, "ko");
     assert.equal(again.get("record").textContent, "녹음 시작");
   } finally {
     again.restore();
   }
+  // A radio-era "en" was an explicit choice too, so a Korean phone keeps it.
+  const migrated = await boot({ storage: { ...ready, [LANGUAGE]: "en" }, locale: "ko-KR" });
+  try {
+    assert.equal(migrated.get("language").value, "en");
+    assert.equal(document.documentElement.lang, "en");
+    for (const [where, text] of shownText(migrated)) assert.ok(!HANGUL.test(text), `${where} is English: ${text}`);
+  } finally {
+    migrated.restore();
+  }
 });
 
-test("an unreadable or late saved language never overrides English or a fresh choice", async () => {
+test("a legacy saved auto or an unknown value is nothing saved: the phone's language is selected and nothing is written", async () => {
+  for (const [raw, locale, code, send] of [
+    ["auto", "it-IT", "it", "Invia a Dot"],
+    ["auto", "ko-KR", "ko", "Dot에 전송"],
+    ["pt", "de-DE", "de", "An Dot senden"],
+  ]) {
+    const h = await boot({ storage: { ...ready, [LANGUAGE]: raw }, locale });
+    try {
+      await h.flush();
+      assert.equal(h.get("language").value, code, `${raw} on ${locale}`);
+      assert.equal(h.get("send").textContent, send, `${raw} on ${locale}`);
+      assert.ok(!h.storageWrites.some(([key]) => key === LANGUAGE), "nothing is rewritten at startup");
+      // A native select fires change only when the selection changes, so keeping the detected language means picking
+      // another language and then the detected one again; each change saves its concrete code, never auto.
+      h.choose("en");
+      await h.flush();
+      assert.deepEqual(h.storageWrites.at(-1), [LANGUAGE, "en"]);
+      assert.equal(h.get("language").value, "en");
+      assert.equal(document.documentElement.lang, "en");
+      assert.equal(h.get("send").textContent, "Send to Dot");
+      h.choose(code);
+      await h.flush();
+      assert.deepEqual(h.storageWrites.at(-1), [LANGUAGE, code]);
+      assert.equal(h.get("language").value, code);
+      assert.equal(document.documentElement.lang, code);
+      assert.equal(h.get("send").textContent, send);
+      assert.deepEqual(
+        h.storageWrites.filter(([key]) => key === LANGUAGE),
+        [
+          [LANGUAGE, "en"],
+          [LANGUAGE, code],
+        ],
+        "only the two changes are written",
+      );
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("a phone language change while open changes nothing; the next launch without a saved choice detects again", async () => {
+  const h = await boot({ storage: { [PREFS]: "", "dot-cloud-device-v1": DEVICE }, locale: "en-US" });
+  try {
+    h.get("soniox-key").value = KEY;
+    h.get("soniox-remember").checked = false;
+    h.get("soniox").onsubmit({ preventDefault() {} });
+    await h.flush();
+    assert.equal(h.opens(), 1);
+    h.get("text").value = "draft in progress";
+    const audio = h.audio.length;
+    const writes = h.storageWrites.length;
+    navigator.language = "ja-JP";
+    h.listeners.get("languagechange")?.();
+    await h.flush();
+    assert.equal(document.documentElement.lang, "en", "the selection is not changed behind the user's back");
+    assert.equal(h.get("language").value, "en");
+    assert.equal(h.get("send").textContent, "Send to Dot");
+    assert.equal(h.get("text").value, "draft in progress");
+    assert.equal(h.get("disconnect").hidden, false, "still connected");
+    assert.equal(h.audio.length, audio, "the microphone is neither closed nor reopened");
+    assert.equal(h.storageWrites.length, writes, "a phone language change saves nothing");
+    h.choose("ko");
+    await h.flush();
+    navigator.language = "fr-FR";
+    h.listeners.get("languagechange")?.();
+    await h.flush();
+    assert.equal(document.documentElement.lang, "ko", "an explicit choice ignores the phone");
+    assert.equal(h.get("language").value, "ko");
+    assert.match(
+      h.get("soniox-status").textContent,
+      /메모리에만 보관/,
+      "the session-only key status is kept, now in Korean",
+    );
+    assert.equal(h.get("text").value, "draft in progress");
+    assert.equal(h.audio.length, audio, "the microphone is neither closed nor reopened");
+  } finally {
+    h.restore();
+  }
+  // Nothing was saved, so the next launch detects the phone's new language again.
+  const next = await boot({ storage: { [PREFS]: "", "dot-cloud-device-v1": DEVICE }, locale: "ja-JP" });
+  try {
+    assert.equal(next.get("language").value, "ja");
+    assert.equal(next.get("send").textContent, "Dot に送信");
+  } finally {
+    next.restore();
+  }
+});
+
+test("an unreadable or late saved language never overrides the phone's language or a fresh choice", async () => {
   const unreadable = await boot({ storage: ready, language: "ko", readFail: [LANGUAGE] });
   try {
     for (const [where, text] of shownText(unreadable)) assert.ok(!HANGUL.test(text), `${where}: ${text}`);
@@ -2201,17 +2359,40 @@ test("an unreadable or late saved language never overrides English or a fresh ch
   }
   const late = await boot({ storage: ready, language: "ko", hold: [LANGUAGE] });
   try {
-    late.get("language-en").onchange();
+    late.choose("en");
     await late.release(LANGUAGE);
     assert.equal(document.documentElement.lang, "en");
     for (const [where, text] of shownText(late)) assert.ok(!HANGUL.test(text), `${where}: ${text}`);
   } finally {
     late.restore();
   }
+  // On a Korean phone, a choice made before the saved value is read wins over it as well.
+  const before = await boot({ storage: ready, language: "de", hold: [LANGUAGE], locale: "ko-KR" });
+  try {
+    assert.equal(before.get("language").value, "ko", "the detected language is selected while the read is pending");
+    before.choose("fr");
+    await before.release(LANGUAGE);
+    assert.equal(before.get("language").value, "fr");
+    assert.equal(document.documentElement.lang, "fr");
+    assert.deepEqual(before.storageWrites.at(-1), [LANGUAGE, "fr"]);
+  } finally {
+    before.restore();
+  }
+  // Without a choice, a late saved value replaces the detected language once it is read.
+  const hydrated = await boot({ storage: ready, language: "de", hold: [LANGUAGE], locale: "ko-KR" });
+  try {
+    assert.equal(hydrated.get("language").value, "ko");
+    await hydrated.release(LANGUAGE);
+    assert.equal(hydrated.get("language").value, "de");
+    assert.equal(document.documentElement.lang, "de");
+    assert.ok(!hydrated.storageWrites.some(([key]) => key === LANGUAGE), "reading a choice never rewrites it");
+  } finally {
+    hydrated.restore();
+  }
   const unsaved = await boot({ storage: ready });
   try {
     unsaved.writeFail = true;
-    unsaved.get("language-ko").onchange();
+    unsaved.choose("ko");
     await unsaved.flush();
     assert.match(unsaved.get("status").textContent, /언어 선택을 저장하지 못했습니다/);
   } finally {
@@ -2245,9 +2426,9 @@ test("switching language keeps the draft, the key being typed, a session-only ke
     const writes = h.storageWrites.length;
     const audio = h.audio.length;
     const polls = h.polls;
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
-    h.get("language-en").onchange();
+    h.choose("en");
     await h.flush();
     assert.equal(h.get("text").value, "draft in progress");
     assert.equal(h.get("soniox-key").value, "partly typed replacement");
@@ -2298,14 +2479,14 @@ test("the capture's own acknowledgement and final reach G2 while its POST is pen
     server.messages = [ack(id, "내일 일정을 확인해 볼게요.")];
     await h.fire(2500);
     assert.equal(bodies(h).at(-1), "내일 일정을 확인해 볼게요.", "the capture's acknowledgement takes G2");
-    assert.match(headers(h).at(-1), /^답변 1\/1 · 중간 답변 · 최종 답변 대기/, "G2 names the intermediate stage");
+    assert.match(headers(h).at(-1), /^1\/1 · 중간 답변 · 최종 답변 대기/, "G2 names the intermediate stage");
     assert.match(h.get("status").textContent, /중간 답변 수신 · 최종 답변 대기/);
     assert.equal(h.get("reply").textContent, "내일 일정을 확인해 볼게요.");
     assert.equal(h.get("message-position").textContent, "1 / 1개 메시지 · 중간 답변 · 최종 답변 대기");
     server.messages = [ack(id, "내일 일정을 확인해 볼게요."), final(id, "내일 오후 2시에 회의가 있어요.")];
     await h.fire(2500);
     assert.equal(bodies(h).at(-1), "내일 오후 2시에 회의가 있어요.", "the reader at the tail follows the final");
-    assert.match(headers(h).at(-1), /^답변 2\/2 · 최종 답변/, "the final is its own entry after the acknowledgement");
+    assert.match(headers(h).at(-1), /^2\/2 · 최종 답변/, "the final is its own entry after the acknowledgement");
     assert.equal(h.get("reply").textContent, "내일 오후 2시에 회의가 있어요.");
     assert.equal(h.get("message-position").textContent, "2 / 2개 메시지 · 최종 답변");
     assert.match(h.get("status").textContent, /최종 답변 수신.*중간 답변도 이전 메시지에 남아 있습니다/);
@@ -2324,7 +2505,7 @@ test("the capture's own acknowledgement and final reach G2 while its POST is pen
     assert.equal(bodies(h).at(-1), "내일 일정을 확인해 볼게요.");
     assert.match(
       headers(h).at(-1),
-      /^답변 1\/2 · 중간 답변(?! · 최종 답변 대기)/,
+      /^1\/2 · 중간 답변(?! · 최종 답변 대기)/,
       "its final is kept, so nothing is pending",
     );
     assert.equal(h.get("message-position").textContent, "1 / 2개 메시지 · 중간 답변");
@@ -2354,11 +2535,11 @@ test("a long reply is split with markers in the selected language and still fits
     h.get("next").onclick();
     await h.flush();
     assert.match(body(), /^\(continued\)\n/);
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
     assert.match(body(), /^\(이어서\)\n/, "the part being read is rewritten in Korean");
     assert.ok(body().length <= 2000);
-    h.get("language-en").onchange();
+    h.choose("en");
     await h.flush();
     assert.match(body(), /^\(continued\)\n/);
     assert.ok(body().length <= 2000);
@@ -2386,7 +2567,7 @@ test("an earlier utterance's acknowledgement and final wait behind live running 
     await release(h, second, "그리고 모레는");
     assert.equal(server.posts.length, 2);
     assert.equal(bodies(h).at(-1), "내일은 비 예보가 있어요.", "the deferred final comes back after submission");
-    assert.match(headers(h).at(-1), /^답변 2\/2 · 최종 답변/);
+    assert.match(headers(h).at(-1), /^2\/2 · 최종 답변/);
     h.get("prev-message").onclick();
     await h.flush();
     assert.equal(bodies(h).at(-1), "찾아볼게요.", "the acknowledgement is still readable before its final");
@@ -2412,26 +2593,22 @@ test("a reader on an older reply keeps it while another utterance's acknowledgem
     await h.fire(2500);
     assert.match(
       headers(h).at(-1),
-      /^답변 1\/3(?! · (중간|최종) 답변)/,
+      /^1\/3(?! · (중간|최종) 답변)/,
       "a reply without an acknowledgement has no stage label",
     );
     server.messages = [...server.messages, final("u", "확인했어요.", day(23))];
     await h.fire(2500);
-    assert.match(
-      headers(h).at(-1),
-      /^답변 1\/4(?! · (중간|최종) 답변)/,
-      "the final is counted beside its acknowledgement",
-    );
+    assert.match(headers(h).at(-1), /^1\/4(?! · (중간|최종) 답변)/, "the final is counted beside its acknowledgement");
     assert.deepEqual(bodies(h).slice(writes), [], "the body being read is never replaced");
     h.get("next-message").onclick();
     h.get("next-message").onclick();
     await h.flush();
     assert.equal(bodies(h).at(-1), "확인할게요.");
-    assert.match(headers(h).at(-1), /^답변 3\/4 · 중간 답변(?! · 최종 답변 대기)/);
+    assert.match(headers(h).at(-1), /^3\/4 · 중간 답변(?! · 최종 답변 대기)/);
     h.get("next-message").onclick();
     await h.flush();
     assert.equal(bodies(h).at(-1), "확인했어요.");
-    assert.match(headers(h).at(-1), /^답변 4\/4 · 최종 답변/);
+    assert.match(headers(h).at(-1), /^4\/4 · 최종 답변/);
   } finally {
     h.restore();
   }
@@ -2446,7 +2623,7 @@ test("a switch rewrites the app's own notices in place but never a Dot reply, ev
   try {
     await h.fire(2500);
     assert.equal(h.get("reply").textContent, "Waiting for a reply.");
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
     assert.equal(h.get("reply").textContent, "Waiting for a reply.", "Dot's words are never translated");
     assert.equal(body(), "Waiting for a reply.");
@@ -2454,7 +2631,7 @@ test("a switch rewrites the app's own notices in place but never a Dot reply, ev
     h.get("disconnect").onclick();
     await h.flush();
     assert.equal(h.get("reply").textContent, "연결을 해제했습니다.");
-    h.get("language-en").onchange();
+    h.choose("en");
     await h.flush();
     assert.equal(h.get("reply").textContent, "Disconnected.");
     assert.equal(body(), "Disconnected.");
@@ -2462,7 +2639,7 @@ test("a switch rewrites the app's own notices in place but never a Dot reply, ev
     h.get("code").value = "not-a-key";
     h.get("pair").onsubmit({ preventDefault() {} });
     assert.match(h.get("pair-status").textContent, /^Paste the whole 64-character/);
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
     assert.match(h.get("pair-status").textContent, /^연결 키는 서버 대시보드에 표시된/);
   } finally {
@@ -2478,12 +2655,12 @@ test("a reader on an acknowledgement behind newer messages keeps its body when t
     h.get("prev-message").onclick();
     await h.flush();
     assert.equal(bodies(h).at(-1), "찾아볼게요.");
-    assert.match(headers(h).at(-1), /^답변 1\/2 · 중간 답변 · 최종 답변 대기/);
+    assert.match(headers(h).at(-1), /^1\/2 · 중간 답변 · 최종 답변 대기/);
     const writes = bodies(h).length;
     server.messages = [...server.messages, final("u", "찾았어요.", day(24))];
     await h.fire(2500);
     assert.deepEqual(bodies(h).slice(writes), [], "the acknowledgement being read stays on G2");
-    assert.match(headers(h).at(-1), /^답변 1\/3 · 중간 답변(?! · 최종 답변 대기)/);
+    assert.match(headers(h).at(-1), /^1\/3 · 중간 답변(?! · 최종 답변 대기)/);
     assert.equal(h.get("message-position").textContent, "1 / 3개 메시지 · 중간 답변");
     assert.equal(h.get("reply").textContent, "찾아볼게요.");
   } finally {
@@ -2498,7 +2675,7 @@ test("a capture notice on G2 is rewritten in the new language while the capture 
     await h.event(EVENT.LONG_PRESS);
     assert.match(body(), /^Recording · let go/);
     const opens = h.opens();
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
     assert.match(body(), /^녹음 중 · 손을 떼면/);
     assert.equal(h.opens(), opens, "the capture keeps its microphone");
@@ -2526,10 +2703,10 @@ test("failed pairing feedback follows the chosen language for HTTP, network and 
       if (failure === "timeout") await h.fire(15000);
       await h.flush();
       assert.match(h.get("pair-status").textContent, /key|server/, `English failure: ${failure}`);
-      h.get("language-ko").onchange();
+      h.choose("ko");
       await h.flush();
       assert.ok(HANGUL.test(h.get("pair-status").textContent), `Korean failure: ${failure}`);
-      h.get("language-en").onchange();
+      h.choose("en");
       await h.flush();
       assert.ok(!HANGUL.test(h.get("pair-status").textContent), `English again: ${failure}`);
     } finally {
@@ -2546,10 +2723,10 @@ test("a visible phone partial changes only its label when the language changes",
     partial(h.sockets.at(-1), ["original user words"]);
     await h.flush();
     assert.equal(h.get("partial").textContent, "Live transcript (not final): original user words");
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
     assert.equal(h.get("partial").textContent, "실시간 인식 (미확정): original user words");
-    h.get("language-en").onchange();
+    h.choose("en");
     await h.flush();
     assert.equal(h.get("partial").textContent, "Live transcript (not final): original user words");
   } finally {
@@ -2564,16 +2741,12 @@ test("an acknowledgement seen after its final reads before it, and a relay that 
   try {
     await h.fire(2500);
     assert.equal(bodies(h).at(-1), "답입니다.");
-    assert.match(
-      headers(h).at(-1),
-      /^답변 1\/1(?! · (중간|최종) 답변)/,
-      "no acknowledgement is kept, so no stage label",
-    );
+    assert.match(headers(h).at(-1), /^1\/1(?! · (중간|최종) 답변)/, "no acknowledgement is kept, so no stage label");
     const writes = bodies(h).length;
     server.messages = [final("u", "답입니다.", day(22)), ack("u", "볼게요.", day(21))];
     for (let i = 0; i < 2; i++) await h.fire(2500);
     assert.deepEqual(bodies(h).slice(writes), [], "the reader stays on the final");
-    assert.match(headers(h).at(-1), /^답변 2\/2 · 최종 답변/);
+    assert.match(headers(h).at(-1), /^2\/2 · 최종 답변/);
     h.get("prev-message").onclick();
     await h.flush();
     assert.equal(bodies(h).at(-1), "볼게요.");
@@ -2599,20 +2772,299 @@ test("stage labels and their statuses follow the chosen language, and labels are
   const h = await boot({ storage: ready, fetch: relay(server) });
   try {
     await h.fire(2500);
-    assert.match(headers(h).at(-1), /^Reply 1\/1 · Interim reply · final answer coming/);
+    assert.match(headers(h).at(-1), /^1\/1 · Interim reply · final answer coming/);
     assert.equal(h.get("message-position").textContent, "Message 1 of 1 · Interim reply · final answer coming");
     assert.match(h.get("status").textContent, /interim reply received · final answer coming/);
     server.messages = [ack("u", "Let me check.", day(22)), final("u", "Found it.", day(23))];
     await h.fire(2500);
-    assert.match(headers(h).at(-1), /^Reply 2\/2 · Final answer/);
+    assert.match(headers(h).at(-1), /^2\/2 · Final answer/);
     assert.match(h.get("status").textContent, /final answer received.*interim reply stays in the previous message/);
     for (const [where, text] of shownText(h)) assert.ok(!HANGUL.test(text), `${where} is English: ${text}`);
-    h.get("language-ko").onchange();
+    h.choose("ko");
     await h.flush();
-    assert.match(headers(h).at(-1), /^답변 2\/2 · 최종 답변/);
+    assert.match(headers(h).at(-1), /^2\/2 · 최종 답변/);
     assert.equal(h.get("message-position").textContent, "2 / 2개 메시지 · 최종 답변");
     assert.equal(h.get("reply").textContent, "Found it.", "Dot's words are never translated");
   } finally {
     h.restore();
+  }
+});
+
+// Every catalog, read as shipped, so each language is checked against its own G2 forms.
+const CATALOGS = Object.fromEntries(
+  await Promise.all(
+    ["en", "de", "fr", "es", "it", "zh", "ja", "ko"].map(async (code) => [
+      code,
+      (await import(`../even-app/src/messages/${code}.ts`))[code],
+    ]),
+  ),
+);
+// Short G2 microphone labels per language: on (listening for Hey dots), may still be on, and off.
+const G2_MIC = {
+  en: { wake: "Mic on · waiting for Hey dots", unsure: "Mic may still be on", off: "Hey dots off · Mic off" },
+  de: {
+    wake: "Mikrofon an · wartet auf Hey dots",
+    unsure: "Mikrofon evtl. noch an",
+    off: "Hey dots aus · Mikrofon aus",
+  },
+  fr: {
+    wake: "Micro allumé · attend Hey dots",
+    unsure: "Micro peut-être encore allumé",
+    off: "Hey dots désactivé · Micro coupé",
+  },
+  es: {
+    wake: "Micrófono encendido · esperando Hey dots",
+    unsure: "Micrófono quizá aún encendido",
+    off: "Hey dots desactivado · Micrófono apagado",
+  },
+  it: {
+    wake: "Microfono acceso · attende Hey dots",
+    unsure: "Microfono forse ancora acceso",
+    off: "Hey dots disattivato · Microfono spento",
+  },
+  zh: { wake: "麦克风开启 · 等待 Hey dots", unsure: "麦克风可能仍开启", off: "Hey dots 已关闭 · 麦克风关闭" },
+  ja: { wake: "マイクオン · Hey dots 待機中", unsure: "マイクがまだオンの可能性", off: "Hey dots オフ · マイクオフ" },
+  ko: {
+    wake: "마이크 켜짐 · Hey dots 대기",
+    unsure: "마이크가 아직 켜져 있을 수 있음",
+    off: "Hey dots 꺼짐 · 마이크 꺼짐",
+  },
+};
+
+// The G2 header is one line of a 560px container whose scrollbar and padding take the right edge. On the official
+// simulator's framebuffer Hangul, Han and kana advance 17-21px, Latin letters and digits 9-11px, and a space or the
+// middle dot about 6px, so the estimate counts the most of each and a character count cannot say what fits.
+const WIDE = /[\p{sc=Hangul}\p{sc=Han}\u3000-\u30ff\uff01-\uff60\uffe0-\uffe6]/u;
+const g2Width = (text) =>
+  Array.from(text).reduce((width, char) => width + (WIDE.test(char) ? 21 : char === " " || char === "·" ? 6 : 11), 0);
+const G2_HEADER = 548;
+
+test("the G2 header keeps the whole microphone state on one line behind a long interim-reply prefix", async () => {
+  for (const [code, mic] of Object.entries(G2_MIC)) {
+    // Reading the twelfth message, an interim reply whose final answer is still coming: the longest header prefix.
+    const replies = Array.from({ length: 11 }, (_, i) => msg2(`m${i}`, `reply ${i}`, day(i + 1)));
+    const server = { revision: 1, messages: [...replies, ack("u", "interim words from Dot", day(12))] };
+    const h = await boot({ language: code, storage: ready, fetch: relay(server) });
+    const header = () => headers(h).at(-1);
+    const { ackLabel, g2MicCore } = CATALOGS[code];
+    // The interim stage stays; where the detail does not fit beside it, the bare on, off or may-be-on state ends it.
+    const check = (expected, bare, what) => {
+      assert.ok(g2Width(header()) <= G2_HEADER, `${code} ${what} fits: ${header()}`);
+      assert.match(header(), /12\/12/, `${code} ${what} keeps the position: ${header()}`);
+      assert.ok(header().includes(` · ${ackLabel}`), `${code} ${what} keeps the interim stage: ${header()}`);
+      assert.ok(
+        header().endsWith(expected) || header().endsWith(` · ${g2MicCore[bare]}`),
+        `${code} ${what} ends with the whole state "${expected}" or "${g2MicCore[bare]}": ${header()}`,
+      );
+    };
+    try {
+      await h.fire(2500);
+      assert.equal(bodies(h).at(-1), "interim words from Dot");
+      h.get("text").value = "draft in progress";
+      assert.equal(h.opens(), 1, `${code}: Hey dots opened the microphone`);
+      await h.frame();
+      check(mic.wake, "on", "listening");
+      // Turning Hey dots off closes the microphone.
+      h.get("wake-enabled").checked = false;
+      h.get("wake-enabled").onchange();
+      await h.flush();
+      check(mic.off, "off", "off");
+      assert.equal(h.get("text").value, "draft in progress");
+      // A typed draft keeps Hey dots paused, so it is sent away before listening resumes.
+      h.get("text").value = "";
+      // Back on, then a stop the host does not confirm.
+      h.get("wake-enabled").checked = true;
+      h.get("wake-enabled").onchange();
+      await h.flush();
+      assert.equal(h.opens(), 2, `${code}: the microphone opened again`);
+      h.audioResults.push(false);
+      h.get("wake-enabled").checked = false;
+      h.get("wake-enabled").onchange();
+      await h.flush();
+      check(mic.unsure, "unsure", "unconfirmed stop");
+      // The reply, the reader position and the draft are untouched.
+      assert.equal(bodies(h).at(-1), "interim words from Dot");
+      assert.equal(h.get("reply").textContent, "interim words from Dot");
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("a manual recording keeps saying the microphone is on when Hey dots is turned off or a draft is typed", async () => {
+  for (const [code, m] of Object.entries(CATALOGS)) {
+    const h = await boot({ language: code, storage: ready });
+    const recordingShown = (what) => {
+      assert.equal(h.audio.at(-1).open, true, `${code} ${what}: the capture's microphone is still open`);
+      assert.ok(
+        headers(h).at(-1).endsWith(m.g2Mic.micOnRecording),
+        `${code} ${what}: G2 says the microphone is recording: ${headers(h).at(-1)}`,
+      );
+      assert.equal(h.get("wake-status").textContent, m.micOnRecording, `${code} ${what}: the phone says so too`);
+    };
+    try {
+      await h.event(EVENT.LONG_PRESS, "textEvent");
+      await h.frame();
+      recordingShown("recording");
+      h.get("wake-enabled").checked = false;
+      h.get("wake-enabled").onchange();
+      await h.flush();
+      recordingShown("Hey dots off");
+      h.get("text").value = "typed meanwhile";
+      h.get("text").oninput();
+      await h.flush();
+      recordingShown("typing");
+      h.get("text").value = "";
+      h.get("text").oninput();
+      await h.flush();
+      recordingShown("draft cleared");
+      // Releasing still ends the capture and closes the microphone.
+      await h.event(EVENT.RELEASE, "textEvent");
+      assert.equal(h.audio.at(-1).open, false, `${code}: release closes the microphone`);
+      assert.ok(headers(h).at(-1).endsWith(m.g2Mic.micOffProcessing), `${code}: ${headers(h).at(-1)}`);
+      assertNoConcurrentOpen(h.audio);
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("G2 gesture feedback and the interim or final stage stay in the header beside the whole microphone state", async () => {
+  for (const [code, m] of Object.entries(CATALOGS)) {
+    // A full history of 100 replies gives the longest position; the last is an interim reply still awaiting its final.
+    const time = (i) =>
+      `2026-10-01T00:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z`;
+    const replies = Array.from({ length: 99 }, (_, i) => msg2(`m${i}`, `reply ${i}`, time(i)));
+    const server = { revision: 1, messages: [...replies, ack("u", "interim words")] };
+    let exitAccepted = true;
+    const h = await boot({ language: code, storage: ready, fetch: relay(server), shutdown: () => exitAccepted });
+    const core = m.g2MicCore ?? {};
+    const check = (what, { stage, note, mic }) => {
+      const header = headers(h).at(-1);
+      assert.ok(g2Width(header) <= G2_HEADER, `${code} ${what} fits: ${header}`);
+      assert.ok(header.startsWith(m.replyPosition(100, 100)), `${code} ${what} keeps the position: ${header}`);
+      if (stage) assert.ok(header.includes(` · ${stage}`), `${code} ${what} keeps the stage "${stage}": ${header}`);
+      if (note) assert.ok(header.includes(` · ${note} · `), `${code} ${what} keeps the note "${note}": ${header}`);
+      assert.ok(
+        mic.some((state) => state && header.endsWith(` · ${state}`)),
+        `${code} ${what} ends with the microphone state: ${header}`,
+      );
+    };
+    try {
+      await h.fire(2500);
+      assert.equal(bodies(h).at(-1), "interim words");
+      await h.frame();
+      const on = [m.g2Mic.micOnWake, core.on];
+      check("listening", { stage: m.ackLabel, mic: on });
+      await h.fire(6000);
+      const quiet = [m.g2Mic.wakeListeningNoSound, core.on];
+      check("no sound yet", { stage: m.ackLabel, mic: quiet });
+      // Scrolling past the last reply is answered only in the header.
+      await h.event(EVENT.SCROLL_BOTTOM, "textEvent");
+      check("last reply", { note: m.edge(100, 1), mic: quiet });
+      // A refused exit is answered only in the header too.
+      exitAccepted = false;
+      await h.event(EVENT.DOUBLE_CLICK, "textEvent");
+      check("exit refused", { note: m.exitFailed, mic: quiet });
+      // The final answer arrives and the reader at the tail follows it.
+      server.messages = [...replies.slice(1), ack("u", "interim words"), final("u", "final words")];
+      await h.fire(2500);
+      assert.equal(bodies(h).at(-1), "final words");
+      check("final", { stage: m.finalLabel, mic: quiet });
+      // A stop the host does not confirm is the longest state; the stage and a gesture note still fit beside it.
+      h.audioResults.push(false);
+      h.get("wake-enabled").checked = false;
+      h.get("wake-enabled").onchange();
+      await h.flush();
+      const unsure = [m.g2Mic.micStopUnconfirmed, core.unsure];
+      check("unconfirmed stop", { stage: m.finalLabel, mic: unsure });
+      await h.event(EVENT.SCROLL_BOTTOM, "textEvent");
+      check("last reply, unconfirmed stop", { note: m.edge(100, 1), mic: unsure });
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("while Hey dots waits for the host to open the microphone, the G2 header never says it is off", async () => {
+  for (const [code, m] of Object.entries(CATALOGS)) {
+    const time = (i) =>
+      `2026-10-01T00:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z`;
+    const replies = Array.from({ length: 99 }, (_, i) => msg2(`m${i}`, `reply ${i}`, time(i)));
+    const server = { revision: 1, messages: [...replies, ack("u", "interim words")] };
+    const h = await boot({ language: code, storage: ready, fetch: relay(server) });
+    const header = () => headers(h).at(-1);
+    try {
+      await h.fire(2500);
+      await h.frame();
+      h.get("wake-enabled").checked = false;
+      h.get("wake-enabled").onchange();
+      await h.flush();
+      // The longest header: the last of 100 replies, an interim one, with a scroll note beside the microphone state.
+      await h.event(EVENT.SCROLL_BOTTOM, "textEvent");
+      let open;
+      h.audioResults.push(new Promise((resolve) => (open = resolve)));
+      h.get("wake-enabled").checked = true;
+      h.get("wake-enabled").onchange();
+      await h.flush();
+      assert.equal(h.audio.at(-1).open, true, `${code}: the open is requested and not answered yet`);
+      assert.ok(header().includes(` · ${m.edge(100, 1)} · `), `${code}: the note stays: ${header()}`);
+      assert.ok(Array.from(header()).length <= 70, `${code}: ${header()}`);
+      assert.ok(!header().endsWith(` · ${m.g2MicCore.off}`), `${code}: a pending open is not called off: ${header()}`);
+      open(true);
+      await h.flush();
+      await h.frame();
+      assert.ok(header().endsWith(` · ${m.g2MicCore.on}`) || header().endsWith(m.g2Mic.micOnWake), header());
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("without a Soniox key the G2 header keeps the reply position, gesture notes and microphone state on one line", async () => {
+  for (const [code, m] of Object.entries(CATALOGS)) {
+    const server = { revision: 1, messages: [1, 2, 3].map((i) => msg2(`m${i}`, `reply ${i}`, day(i))) };
+    let exitAccepted = true;
+    const paired = { [PREFS]: "", "dot-cloud-device-v1": DEVICE };
+    const h = await boot({ language: code, storage: paired, fetch: relay(server), shutdown: () => exitAccepted });
+    const check = (what, note) => {
+      const header = headers(h).at(-1);
+      assert.ok(g2Width(header) <= G2_HEADER, `${code} ${what} fits the header: ${header} (${g2Width(header)})`);
+      assert.ok(header.startsWith(m.replyPosition(3, 3)), `${code} ${what} keeps the position: ${header}`);
+      if (note) assert.ok(header.includes(` · ${note} · `), `${code} ${what} keeps the note "${note}": ${header}`);
+      assert.ok(
+        [m.wakeBlocked.transcriber, m.g2MicCore.off].some((state) => header.endsWith(` · ${state}`)),
+        `${code} ${what} ends with the whole microphone state: ${header}`,
+      );
+    };
+    try {
+      await h.fire(2500);
+      assert.equal(bodies(h).at(-1), "reply 3");
+      assert.equal(h.opens(), 0, `${code}: without a key the microphone stays closed`);
+      check("latest reply");
+      await h.event(EVENT.SCROLL_BOTTOM, "textEvent");
+      check("last reply", m.edge(3, 1));
+      exitAccepted = false;
+      await h.event(EVENT.DOUBLE_CLICK, "textEvent");
+      check("exit refused", m.exitFailed);
+      assert.equal(bodies(h).at(-1), "reply 3", `${code}: the body is untouched`);
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("the G2 startup header is fitted to one line like every later header", async () => {
+  for (const [code, m] of Object.entries(CATALOGS)) {
+    // A phone in this language with saved settings still loading: the header G2 starts with, before any later notice.
+    const h = await boot({ languages: [code], storage: ready, hold: [PREFS] });
+    try {
+      const startup = h.startup.textObject.find((t) => t.containerID === 2).content;
+      assert.ok(g2Width(startup) <= G2_HEADER, `${code} startup header fits: ${startup} (${g2Width(startup)})`);
+      assert.equal(startup, m.wakeBlocked.settings, `${code} startup header says why Hey dots waits`);
+      assert.equal(headers(h).at(-1) ?? startup, startup, `${code} the first rewrite keeps the same header`);
+    } finally {
+      h.restore();
+    }
   }
 });

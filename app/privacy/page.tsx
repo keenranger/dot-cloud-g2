@@ -1,16 +1,55 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import type { Locale } from "@/lib/locale";
 import PolicyPage, { CONTACT_EMAIL, RELAY_ORIGIN } from "../components/policy-page";
-import { PRODUCT_NAME } from "../i18n/dashboard";
+import { PRODUCT_NAME, copy } from "../i18n/dashboard";
+import { requestLocale } from "../i18n/request-locale";
+import * as de from "./i18n/de";
+import * as fr from "./i18n/fr";
+import * as es from "./i18n/es";
+import * as it from "./i18n/it";
+import * as zh from "./i18n/zh";
+import * as ja from "./i18n/ja";
+import * as ko from "./i18n/ko";
 
-export const metadata: Metadata = {
-  title: `Privacy Notice — ${PRODUCT_NAME}`,
-  description: "What Lens MCP for G2 processes, where it goes, how long the relay keeps it and how to erase it.",
+export const dynamic = "force-dynamic";
+
+type Props = { searchParams: Promise<Record<string, string | string[]>> };
+// The English text below is the source; each translation keeps its sections, lists and facts.
+const translations: Record<Exclude<Locale, "en">, { description: string; default: () => React.JSX.Element }> = {
+  de,
+  fr,
+  es,
+  it,
+  zh,
+  ja,
+  ko,
 };
 
-export default function Privacy() {
+export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
+  const locale = await requestLocale(searchParams);
+  return {
+    title: `${copy[locale].page.privacy} — ${PRODUCT_NAME}`,
+    description:
+      locale === "en"
+        ? "What Lens MCP for G2 processes, where it goes, how long the relay keeps it and how to erase it."
+        : translations[locale].description,
+  };
+}
+
+export default async function Privacy({ searchParams }: Props) {
+  const locale = await requestLocale(searchParams);
+  const Body = locale === "en" ? English : translations[locale].default;
   return (
-    <PolicyPage title="Privacy Notice">
+    <PolicyPage locale={locale} page="privacy" title={copy[locale].page.privacy}>
+      <Body />
+    </PolicyPage>
+  );
+}
+
+function English() {
+  return (
+    <>
       <section aria-labelledby="who">
         <h2 id="who">Who we are</h2>
         <p>
@@ -207,9 +246,9 @@ export default function Privacy() {
         <p>
           If this notice changes, the updated version and its effective date will be posted on this page. For questions
           or requests about your information, email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. See also
-          the <Link href="/terms">Terms of Use</Link>.
+          the <Link href="/terms?lang=en">Terms of Use</Link>.
         </p>
       </section>
-    </PolicyPage>
+    </>
   );
 }

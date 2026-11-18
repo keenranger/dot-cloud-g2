@@ -1,20 +1,59 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import type { Locale } from "@/lib/locale";
 import PolicyPage, { CONTACT_EMAIL, RELAY_ORIGIN } from "../components/policy-page";
-import { PRODUCT_NAME } from "../i18n/dashboard";
+import { PRODUCT_NAME, copy } from "../i18n/dashboard";
+import { requestLocale } from "../i18n/request-locale";
+import * as de from "./i18n/de";
+import * as fr from "./i18n/fr";
+import * as es from "./i18n/es";
+import * as it from "./i18n/it";
+import * as zh from "./i18n/zh";
+import * as ja from "./i18n/ja";
+import * as ko from "./i18n/ko";
 
-export const metadata: Metadata = {
-  title: `Terms of Use — ${PRODUCT_NAME}`,
-  description: "What Lens MCP for G2 provides, what it needs from you and its limits.",
+export const dynamic = "force-dynamic";
+
+type Props = { searchParams: Promise<Record<string, string | string[]>> };
+// The English text below is the source; each translation keeps its sections, lists and facts.
+const translations: Record<Exclude<Locale, "en">, { description: string; default: () => React.JSX.Element }> = {
+  de,
+  fr,
+  es,
+  it,
+  zh,
+  ja,
+  ko,
 };
 
-export default function Terms() {
+export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
+  const locale = await requestLocale(searchParams);
+  return {
+    title: `${copy[locale].page.terms} — ${PRODUCT_NAME}`,
+    description:
+      locale === "en"
+        ? "What Lens MCP for G2 provides, what it needs from you and its limits."
+        : translations[locale].description,
+  };
+}
+
+export default async function Terms({ searchParams }: Props) {
+  const locale = await requestLocale(searchParams);
+  const Body = locale === "en" ? English : translations[locale].default;
   return (
-    <PolicyPage title="Terms of Use">
+    <PolicyPage locale={locale} page="terms" title={copy[locale].page.terms}>
+      <Body />
+    </PolicyPage>
+  );
+}
+
+function English() {
+  return (
+    <>
       <p>
         These terms apply to the Lens MCP for G2 companion app and the relay website at{" "}
         <a href={RELAY_ORIGIN}>{RELAY_ORIGIN}</a>, published by <strong>keenranger</strong>. Please read them together
-        with the <Link href="/privacy">Privacy Notice</Link>.
+        with the <Link href="/privacy?lang=en">Privacy Notice</Link>.
       </p>
 
       <section aria-labelledby="service">
@@ -78,7 +117,8 @@ export default function Terms() {
         <p>
           You can switch off “Hey dots”, stop a recording, clear your Soniox key, disconnect the companion, withdraw
           your connection key, disconnect all devices and erase your conversations at any time, as described in the{" "}
-          <Link href="/privacy">Privacy Notice</Link>. Data held by other providers stays subject to their own controls.
+          <Link href="/privacy?lang=en">Privacy Notice</Link>. Data held by other providers stays subject to their own
+          controls.
         </p>
       </section>
 
@@ -97,6 +137,6 @@ export default function Terms() {
           <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
         </p>
       </section>
-    </PolicyPage>
+    </>
   );
 }

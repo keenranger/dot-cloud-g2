@@ -1,6 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Divider } from "@astryxdesign/core/Divider";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Link } from "@astryxdesign/core/Link";
+import { StatusDot } from "@astryxdesign/core/StatusDot";
+import { Text } from "@astryxdesign/core/Text";
+import { TextArea } from "@astryxdesign/core/TextArea";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import {
   type ActivePairing,
   type RevealedPairing,
@@ -46,6 +60,21 @@ function pairingFailure(t: Text, status: number, action: "create" | "reveal" | "
   return t.keyFailed[action];
 }
 class SessionExpired extends Error {}
+// Astryx buttons are disabled with aria-disabled and keep focus, where a native disabled button dropped it to the body.
+function isEnabled(el: HTMLElement) {
+  return !(el instanceof HTMLButtonElement && el.disabled) && el.getAttribute("aria-disabled") !== "true";
+}
+// Focus counts as not moved by the user when it fell to the body, stayed on the control that started the operation,
+// or sits on a control that is still disabled.
+function focusUnmoved(pressed: Element | null) {
+  const focused = document.activeElement;
+  return (
+    !focused ||
+    focused === document.body ||
+    focused === pressed ||
+    (focused instanceof HTMLElement && focused.getAttribute("aria-disabled") === "true")
+  );
+}
 async function getActive() {
   const response = await fetch("/api/pairing", { cache: "no-store" });
   if (!response.ok) throw new Error("pairing state unavailable");
@@ -62,14 +91,16 @@ export default function Dashboard({ displayName, locale }: { displayName: string
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
-  const deletePrompt = useRef<HTMLParagraphElement>(null);
+  const deletePrompt = useRef<HTMLElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
   const pairingButton = useRef<HTMLButtonElement>(null);
   const withdrawButton = useRef<HTMLButtonElement>(null);
   const revealToggle = useRef<HTMLButtonElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   const copyButton = useRef<HTMLButtonElement>(null);
-  const pairingPrompt = useRef<HTMLParagraphElement>(null);
+  const pairingPrompt = useRef<HTMLElement>(null);
+  // The control focused when a create, withdraw, reveal or erase started; Astryx keeps it focused while it is busy.
+  const pressedControl = useRef<Element | null>(null);
   // Bumped when a create, withdraw, revoke, refresh or server check starts, or a session failure hides the key, so a
   // server check or reveal that started earlier cannot overwrite the newer state.
   const pairingVersion = useRef(0);
@@ -206,20 +237,22 @@ export default function Dashboard({ displayName, locale }: { displayName: string
     if (busy || withdrawing || !focusAfterPairing.current) return;
     const target = focusAfterPairing.current;
     focusAfterPairing.current = null;
-    // Disabling the pressed button drops focus to the body; keep any place the user moved to meanwhile.
-    if (document.activeElement && document.activeElement !== document.body) return;
+    const pressed = pressedControl.current;
+    pressedControl.current = null;
+    // Keep any place the user moved to meanwhile.
+    if (!focusUnmoved(pressed)) return;
     const preferred =
       target === "prompt" ? pairingPrompt.current : target === "toggle" ? revealToggle.current : pairingButton.current;
-    [preferred, pairingButton.current, refreshButton.current]
-      .find((el) => el && !(el instanceof HTMLButtonElement && el.disabled))
-      ?.focus();
+    [preferred, pairingButton.current, refreshButton.current].find((el) => el && isEnabled(el))?.focus();
   }, [busy, withdrawing, active]);
   useEffect(() => {
     if (deleting || !focusAfterDelete.current) return;
     const outcome = focusAfterDelete.current;
     focusAfterDelete.current = null;
-    // Disabling the pressed button drops focus to the body; keep any place the user moved to meanwhile.
-    if (document.activeElement && document.activeElement !== document.body) return;
+    const pressed = pressedControl.current;
+    pressedControl.current = null;
+    // Keep any place the user moved to meanwhile.
+    if (!focusUnmoved(pressed)) return;
     // After a failure the warning stays open so retry and cancel are the next Tab stops.
     // A failed refresh hides the deletion group, so fall back to the always-present refresh control.
     ((outcome === "failure" ? deletePrompt.current : null) ?? deleteTrigger.current ?? refreshButton.current)?.focus();
@@ -228,10 +261,12 @@ export default function Dashboard({ displayName, locale }: { displayName: string
   useEffect(() => {
     if (revealing || refreshing || busy || revoking || withdrawing || !focusAfterKey.current) return;
     focusAfterKey.current = false;
-    // Removing the focused key or disabling the pressed reveal control drops focus to the body; keep any place the
-    // user moved to meanwhile.
-    if (document.activeElement && document.activeElement !== document.body) return;
-    [revealToggle.current, pairingButton.current, refreshButton.current].find((el) => el && !el.disabled)?.focus();
+    const pressed = pressedControl.current;
+    pressedControl.current = null;
+    // Removing the focused key, disabling the copy control or a busy reveal control leaves focus unmoved; keep any
+    // place the user moved to meanwhile.
+    if (!focusUnmoved(pressed)) return;
+    [revealToggle.current, pairingButton.current, refreshButton.current].find((el) => el && isEnabled(el))?.focus();
   }, [revealed, revealing, refreshing, active, busy, revoking, withdrawing]);
 
   function startConfirm(kind: "rotate" | "withdraw") {
@@ -244,11 +279,12 @@ export default function Dashboard({ displayName, locale }: { displayName: string
     setConfirming(null);
     // Back to the control that opened the warning; removing the pressed cancel drops focus to the body only.
     requestAnimationFrame(() => {
-      if (document.activeElement && document.activeElement !== document.body) return;
-      [trigger.current, pairingButton.current, refreshButton.current].find((el) => el && !el.disabled)?.focus();
+      if (!focusUnmoved(null)) return;
+      [trigger.current, pairingButton.current, refreshButton.current].find((el) => el && isEnabled(el))?.focus();
     });
   }
   async function createPairing() {
+    pressedControl.current = document.activeElement;
     setBusy(true);
     setError("");
     setMessage("");
@@ -285,10 +321,13 @@ export default function Dashboard({ displayName, locale }: { displayName: string
       // The server may or may not have replaced the key; show only what it still reports.
       else await syncPairing();
     } finally {
+      // A superseded run sets no focus target; drop its pressed control so a later focus check cannot use it.
+      if (!focusAfterPairing.current) pressedControl.current = null;
       setBusy(false);
     }
   }
   async function withdrawPairing() {
+    pressedControl.current = document.activeElement;
     setWithdrawing(true);
     setError("");
     setMessage("");
@@ -310,6 +349,7 @@ export default function Dashboard({ displayName, locale }: { displayName: string
       if (cause instanceof SessionExpired) dropPairing();
       else await syncPairing();
     } finally {
+      if (!focusAfterPairing.current) pressedControl.current = null;
       setWithdrawing(false);
     }
   }
@@ -322,8 +362,11 @@ export default function Dashboard({ displayName, locale }: { displayName: string
     // Every write below is skipped once a pairing operation starts or the page is hidden; that newer context owns the
     // key, the error and the reveal control's state.
     const current = fence(pairingVersion, revealVersion);
-    // The pressed control is disabled while the reveal runs, which drops focus to the body.
-    if (document.activeElement === revealToggle.current) focusAfterKey.current = true;
+    // The pressed control is disabled while the reveal runs; focus returns to it once it is enabled again.
+    if (document.activeElement === revealToggle.current) {
+      pressedControl.current = revealToggle.current;
+      focusAfterKey.current = true;
+    }
     setRevealing(true);
     setError("");
     let result: RevealedPairing | null | undefined;
@@ -391,6 +434,7 @@ export default function Dashboard({ displayName, locale }: { displayName: string
     requestAnimationFrame(() => deleteTrigger.current?.focus());
   }
   async function deleteConversations() {
+    pressedControl.current = document.activeElement;
     setDeleting(true);
     setError("");
     setMessage("");
@@ -429,274 +473,348 @@ export default function Dashboard({ displayName, locale }: { displayName: string
 
   return (
     <section className="dashboard" aria-labelledby="dashboard-title">
-      <div className="dashboard-heading">
-        <div>
-          <p className="eyebrow">{t.eyebrow}</p>
-          <h2 id="dashboard-title">{t.title}</h2>
-          <p className="account">{displayName}</p>
-        </div>
-        <button
-          ref={refreshButton}
-          className="button secondary small"
-          type="button"
-          onClick={() => void refresh()}
-          disabled={refreshing}
-        >
-          {refreshing ? t.checking : t.refresh}
-        </button>
-      </div>
-      <div className="status-grid" role="group" aria-label={t.statusLabel}>
-        <StatusItem label={t.devices} value={status ? t.deviceCount(status.deviceCount) : unavailableStatus} />
-        <StatusItem
-          label={t.dot}
-          value={status ? (status.subscribed ? t.dotSubscribed : t.dotWaiting) : unavailableStatus}
-        />
-        <StatusItem label={t.pending} value={status ? t.pendingCount(status.pendingCount) : unavailableStatus} />
-        <StatusItem label={t.speech} value={status ? t.speechValue : unavailableStatus} />
-      </div>
-      {status?.delivery?.last && (
-        <p className="helper">
-          {t.lastDelivery(
-            t.delivery[status.delivery.last.category] +
-              (status.delivery.last.httpStatus ? ` (HTTP ${status.delivery.last.httpStatus})` : ""),
-            formatDate(status.delivery.last.at),
-            status.delivery.acceptedAwaitingReply,
-            status.delivery.backingOff,
-            status.delivery.exhausted,
-          )}
-        </p>
-      )}
-      <div role="status" aria-live="polite" className="feedback">
-        {message}
-      </div>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <div className="setup-grid">
-        <section className="setup-card" aria-labelledby="pair-title">
-          <span className="step" aria-hidden="true">
-            01
-          </span>
-          <h3 id="pair-title">{t.pairTitle}</h3>
-          <p>{t.pairBody}</p>
-          <AddressField
-            id="server-address"
-            label={t.serverAddress}
-            value={origin}
-            pending={t.addressPending}
-            copyText={t.copy}
-            copyLabel={t.copyLabel(t.serverAddress)}
-            onCopy={copy}
+      <VStack gap={6}>
+        <HStack gap={5} vAlign="center" hAlign="between" wrap="wrap">
+          <VStack gap={1} className="dashboard-heading">
+            <Text as="p" type="label" color="secondary" className="eyebrow">
+              {t.eyebrow}
+            </Text>
+            <Heading level={2} id="dashboard-title">
+              {t.title}
+            </Heading>
+            <Text as="p" type="supporting" color="secondary" className="account">
+              {displayName}
+            </Text>
+          </VStack>
+          <Button
+            ref={refreshButton}
+            size="sm"
+            label={refreshing ? t.checking : t.refresh}
+            isDisabled={refreshing}
+            onClick={() => void refresh()}
           />
-          <p className="helper">{t.keyHelp}</p>
-          {active && active !== "unavailable" && active.revealable && (
-            <div className="pairing-result" role="group" aria-labelledby="pairing-code-label">
-              <label id="pairing-code-label" htmlFor="pairing-code">
-                {t.keyLabel}
-              </label>
-              <div className="code-row">
-                <input
-                  ref={codeInput}
-                  id="pairing-code"
-                  readOnly
-                  value={revealed?.code ?? ""}
-                  placeholder={t.keyHidden}
-                  autoComplete="off"
-                  spellCheck={false}
+        </HStack>
+        <Grid columns={{ minWidth: 160, max: 4 }} width="100%" gap={3} role="group" aria-label={t.statusLabel}>
+          <StatusItem label={t.devices} value={status ? t.deviceCount(status.deviceCount) : unavailableStatus} />
+          <StatusItem
+            label={t.dot}
+            value={status ? (status.subscribed ? t.dotSubscribed : t.dotWaiting) : unavailableStatus}
+            tone={status ? (status.subscribed ? "success" : "warning") : "neutral"}
+          />
+          <StatusItem label={t.pending} value={status ? t.pendingCount(status.pendingCount) : unavailableStatus} />
+          <StatusItem label={t.speech} value={status ? t.speechValue : unavailableStatus} />
+        </Grid>
+        {status?.delivery?.last && (
+          <Text as="p" type="supporting" color="secondary">
+            {t.lastDelivery(
+              t.delivery[status.delivery.last.category] +
+                (status.delivery.last.httpStatus ? ` (HTTP ${status.delivery.last.httpStatus})` : ""),
+              formatDate(status.delivery.last.at),
+              status.delivery.acceptedAwaitingReply,
+              status.delivery.backingOff,
+              status.delivery.exhausted,
+            )}
+          </Text>
+        )}
+        {/* Always mounted so screen readers hear each new notice. */}
+        <div role="status" aria-live="polite" className="feedback">
+          {message && (
+            <Text type="supporting" color="accent" weight="semibold">
+              {message}
+            </Text>
+          )}
+        </div>
+        {error && <Banner status="error" role="alert" title={error} collapsible={false} />}
+        <Grid columns={{ minWidth: 320, max: 2 }} width="100%" gap={4}>
+          <Card role="region" aria-labelledby="pair-title" padding={6} elevation="low">
+            <VStack gap={4}>
+              <StepHeader step="01" id="pair-title" title={t.pairTitle} />
+              <Text as="p" color="secondary">
+                {t.pairBody}
+              </Text>
+              <AddressField
+                id="server-address"
+                label={t.serverAddress}
+                value={origin}
+                pending={t.addressPending}
+                copyText={t.copy}
+                copyLabel={t.copyLabel(t.serverAddress)}
+                onCopy={copy}
+              />
+              <Text as="p" type="supporting" color="secondary">
+                {t.keyHelp}
+              </Text>
+              {active && active !== "unavailable" && active.revealable && (
+                <VStack gap={2}>
+                  <Divider />
+                  <HStack gap={2} vAlign="end" wrap="wrap" role="group" aria-label={t.keyLabel} className="field-row">
+                    <div className="field-grow">
+                      <TextInput
+                        ref={codeInput}
+                        id="pairing-code"
+                        label={t.keyLabel}
+                        isReadOnly
+                        value={revealed?.code ?? ""}
+                        placeholder={t.keyHidden}
+                        autoComplete="off"
+                        hasSpellCheck={false}
+                        width="100%"
+                      />
+                    </div>
+                    <Button
+                      ref={revealToggle}
+                      size="md"
+                      label={revealing ? t.checking : revealed ? t.hideKey : t.showKey}
+                      aria-controls="pairing-code"
+                      aria-expanded={!!revealed}
+                      isDisabled={revealing || refreshing || busy || withdrawing || revoking}
+                      onClick={() => void toggleKey()}
+                    />
+                    <Button
+                      ref={copyButton}
+                      size="md"
+                      label={t.copyLabel(t.keyLabel)}
+                      isDisabled={!revealed}
+                      onClick={() => revealed && void copy(revealed.code)}
+                    >
+                      {t.copy}
+                    </Button>
+                  </HStack>
+                  {active.createdAt && (
+                    <Text as="p" type="supporting" color="secondary">
+                      {t.keyCreated(formatDate(active.createdAt))}
+                    </Text>
+                  )}
+                </VStack>
+              )}
+              {active && active !== "unavailable" && !active.revealable && (
+                <Text as="p" type="supporting" color="secondary">
+                  {t.legacyCode(active.expiresAt ? formatDate(active.expiresAt) : null)}
+                </Text>
+              )}
+              {active === "unavailable" && (
+                <Text as="p" type="supporting" color="secondary">
+                  {t.keyUnavailable}
+                </Text>
+              )}
+              <HStack gap={2} wrap="wrap">
+                <Button
+                  ref={pairingButton}
+                  variant="primary"
+                  label={busy ? t.creatingKey : active ? t.createNewKey : t.createKey}
+                  isDisabled={busy || revoking || withdrawing || active === undefined || active === "unavailable"}
+                  onClick={() => (active ? startConfirm("rotate") : void createPairing())}
                 />
-                <button
-                  ref={revealToggle}
-                  className="button secondary small"
-                  type="button"
-                  aria-controls="pairing-code"
-                  aria-expanded={!!revealed}
-                  disabled={revealing || refreshing || busy || withdrawing || revoking}
-                  onClick={() => void toggleKey()}
-                >
-                  {revealing ? t.checking : revealed ? t.hideKey : t.showKey}
-                </button>
-                <button
-                  ref={copyButton}
-                  className="button secondary small"
-                  type="button"
-                  aria-label={t.copyLabel(t.keyLabel)}
-                  disabled={!revealed}
-                  onClick={() => revealed && void copy(revealed.code)}
-                >
-                  {t.copy}
-                </button>
-              </div>
-              {active.createdAt && <p>{t.keyCreated(formatDate(active.createdAt))}</p>}
-            </div>
+                {active && active !== "unavailable" && (
+                  <Button
+                    ref={withdrawButton}
+                    variant="ghost"
+                    label={t.revokeKey}
+                    isDisabled={busy || revoking || withdrawing}
+                    onClick={() => startConfirm("withdraw")}
+                  />
+                )}
+              </HStack>
+              {confirming && (
+                <Card variant="yellow" padding={4} role="group" aria-labelledby="pairing-confirm-title">
+                  <VStack gap={3}>
+                    <Text as="p" id="pairing-confirm-title" ref={pairingPrompt} tabIndex={-1} weight="medium">
+                      {confirming === "rotate" ? t.confirmRotate : t.confirmRevoke}
+                    </Text>
+                    <HStack gap={2} wrap="wrap">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        label={
+                          confirming === "rotate"
+                            ? busy
+                              ? t.creatingKey
+                              : t.createNewKey
+                            : withdrawing
+                              ? t.revokingKey
+                              : t.revokeKey
+                        }
+                        isDisabled={busy || withdrawing}
+                        onClick={() => void (confirming === "rotate" ? createPairing() : withdrawPairing())}
+                      />
+                      <Button size="sm" label={t.cancel} isDisabled={busy || withdrawing} onClick={cancelConfirm} />
+                    </HStack>
+                  </VStack>
+                </Card>
+              )}
+            </VStack>
+          </Card>
+          <Card role="region" aria-labelledby="dot-title" padding={6} elevation="low">
+            <VStack gap={4}>
+              <StepHeader step="02" id="dot-title" title={t.dotTitle} />
+              <Text as="p" color="secondary">
+                {t.dotBody}
+              </Text>
+              <ol className="steps">
+                {t.dotSteps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+              <AddressField
+                id="mcp-address"
+                label={t.mcpAddress}
+                value={origin ? `${origin}/mcp` : ""}
+                pending={t.addressPending}
+                copyText={t.copy}
+                copyLabel={t.copyLabel(t.mcpAddress)}
+                onCopy={copy}
+              />
+              <TextArea id="dot-prompt" label={t.promptLabel} isReadOnly value={dotPrompt} rows={6} />
+              <HStack>
+                <Button label={t.copyPrompt} onClick={() => void copy(dotPrompt)} />
+              </HStack>
+            </VStack>
+          </Card>
+        </Grid>
+        <Card role="region" aria-labelledby="stt-title" variant="muted" padding={6}>
+          <VStack gap={3}>
+            <StepHeader step="03" id="stt-title" title={t.speechTitle} />
+            <Text as="p" color="secondary">
+              {t.speechBody}
+            </Text>
+            <ol className="steps">
+              <li>
+                {t.speechSteps[0]}{" "}
+                <Link href={sonioxKeyGuide} as="a" target="_blank" rel="noreferrer" hasUnderline>
+                  {t.sonioxGuide}
+                </Link>
+              </li>
+              <li>{t.speechSteps[1]}</li>
+              <li>{t.speechSteps[2]}</li>
+            </ol>
+            <Text as="p" type="supporting" color="secondary">
+              {t.speechPrivacy}
+            </Text>
+          </VStack>
+        </Card>
+        <VStack gap={0}>
+          {status && status.deviceCount > 0 && (
+            <>
+              <Divider />
+              <HStack gap={4} vAlign="center" hAlign="between" wrap="wrap" paddingBlock={4}>
+                <Text as="p" type="supporting" color="secondary" className="action-copy">
+                  {t.revokeAllBody}
+                </Text>
+                <Button
+                  size="sm"
+                  label={revoking ? t.revokingAll : t.revokeAll}
+                  isDisabled={revoking || busy}
+                  onClick={() => void revokeAll()}
+                />
+              </HStack>
+            </>
           )}
-          {active && active !== "unavailable" && !active.revealable && (
-            <p className="helper">{t.legacyCode(active.expiresAt ? formatDate(active.expiresAt) : null)}</p>
+          {status && (
+            <>
+              <Divider />
+              <HStack
+                gap={4}
+                vAlign="center"
+                hAlign="between"
+                wrap="wrap"
+                paddingBlock={4}
+                role="group"
+                aria-labelledby="delete-conversations-title"
+              >
+                <VStack gap={2} className="action-copy">
+                  <Text as="p" type="supporting" color="secondary" id="delete-conversations-title">
+                    {t.deleteBody}
+                  </Text>
+                  {confirmingDelete && (
+                    <Text as="p" ref={deletePrompt} tabIndex={-1} type="supporting" weight="semibold">
+                      {t.deleteConfirm}
+                    </Text>
+                  )}
+                </VStack>
+                {confirmingDelete ? (
+                  <HStack gap={2} wrap="wrap">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      label={deleting ? t.deleting : t.deleteForever}
+                      isDisabled={deleting}
+                      onClick={() => void deleteConversations()}
+                    />
+                    <Button size="sm" label={t.cancel} isDisabled={deleting} onClick={cancelDelete} />
+                  </HStack>
+                ) : (
+                  <Button ref={deleteTrigger} size="sm" label={t.deleteStart} onClick={startDelete} />
+                )}
+              </HStack>
+              <Divider />
+            </>
           )}
-          {active === "unavailable" && <p className="helper">{t.keyUnavailable}</p>}
-          <div className="pairing-actions">
-            <button
-              ref={pairingButton}
-              type="button"
-              className="button primary"
-              disabled={busy || revoking || withdrawing || active === undefined || active === "unavailable"}
-              onClick={() => (active ? startConfirm("rotate") : void createPairing())}
-            >
-              {busy ? t.creatingKey : active ? t.createNewKey : t.createKey}
-            </button>
-            {active && active !== "unavailable" && (
-              <button
-                ref={withdrawButton}
-                type="button"
-                className="button secondary small"
-                disabled={busy || revoking || withdrawing}
-                onClick={() => startConfirm("withdraw")}
-              >
-                {t.revokeKey}
-              </button>
-            )}
-          </div>
-          {confirming && (
-            <div className="pairing-confirm" role="group" aria-labelledby="pairing-confirm-title">
-              <p id="pairing-confirm-title" ref={pairingPrompt} tabIndex={-1}>
-                {confirming === "rotate" ? t.confirmRotate : t.confirmRevoke}
-              </p>
-              <button
-                type="button"
-                className="button secondary small"
-                disabled={busy || withdrawing}
-                onClick={() => void (confirming === "rotate" ? createPairing() : withdrawPairing())}
-              >
-                {confirming === "rotate"
-                  ? busy
-                    ? t.creatingKey
-                    : t.createNewKey
-                  : withdrawing
-                    ? t.revokingKey
-                    : t.revokeKey}
-              </button>
-              <button
-                type="button"
-                className="button secondary small"
-                disabled={busy || withdrawing}
-                onClick={cancelConfirm}
-              >
-                {t.cancel}
-              </button>
-            </div>
-          )}
+        </VStack>
+        <section aria-labelledby="ask-title">
+          <HStack gap={5} vAlign="start" wrap="wrap">
+            <StepBadge step="04" />
+            <VStack gap={2} className="action-copy">
+              <Heading level={3} id="ask-title">
+                {t.askTitle}
+              </Heading>
+              <Text as="p" color="secondary">
+                {t.askBody}
+              </Text>
+            </VStack>
+          </HStack>
         </section>
-        <section className="setup-card" aria-labelledby="dot-title">
-          <span className="step" aria-hidden="true">
-            02
-          </span>
-          <h3 id="dot-title">{t.dotTitle}</h3>
-          <p>{t.dotBody}</p>
-          <ol className="setup-steps">
-            {t.dotSteps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-          <AddressField
-            id="mcp-address"
-            label={t.mcpAddress}
-            value={origin ? `${origin}/mcp` : ""}
-            pending={t.addressPending}
-            copyText={t.copy}
-            copyLabel={t.copyLabel(t.mcpAddress)}
-            onCopy={copy}
-          />
-          <label className="field-label" htmlFor="dot-prompt">
-            {t.promptLabel}
-          </label>
-          <textarea id="dot-prompt" readOnly value={dotPrompt} rows={6} />
-          <button className="button secondary" type="button" onClick={() => void copy(dotPrompt)}>
-            {t.copyPrompt}
-          </button>
-        </section>
-      </div>
-      <section className="notice" aria-labelledby="stt-title">
-        <span className="step" aria-hidden="true">
-          03
-        </span>
-        <h3 id="stt-title">{t.speechTitle}</h3>
-        <p>{t.speechBody}</p>
-        <ol>
-          <li>
-            {t.speechSteps[0]}{" "}
-            <a href={sonioxKeyGuide} target="_blank" rel="noreferrer">
-              {t.sonioxGuide}
-            </a>
-          </li>
-          <li>{t.speechSteps[1]}</li>
-          <li>{t.speechSteps[2]}</li>
-        </ol>
-        <p>{t.speechPrivacy}</p>
-      </section>
-      {status && status.deviceCount > 0 && (
-        <div className="device-actions">
-          <p>{t.revokeAllBody}</p>
-          <button
-            type="button"
-            className="button secondary small"
-            disabled={revoking || busy}
-            onClick={() => void revokeAll()}
-          >
-            {revoking ? t.revokingAll : t.revokeAll}
-          </button>
-        </div>
-      )}
-      {status && (
-        <div className="device-actions" role="group" aria-labelledby="delete-conversations-title">
-          <div>
-            <p id="delete-conversations-title">{t.deleteBody}</p>
-            {confirmingDelete && (
-              <p ref={deletePrompt} tabIndex={-1}>
-                {t.deleteConfirm}
-              </p>
-            )}
-          </div>
-          {confirmingDelete ? (
-            <div>
-              <button
-                type="button"
-                className="button secondary small"
-                disabled={deleting}
-                onClick={() => void deleteConversations()}
-              >
-                {deleting ? t.deleting : t.deleteForever}
-              </button>
-              <button type="button" className="button secondary small" disabled={deleting} onClick={cancelDelete}>
-                {t.cancel}
-              </button>
-            </div>
-          ) : (
-            <button ref={deleteTrigger} type="button" className="button secondary small" onClick={startDelete}>
-              {t.deleteStart}
-            </button>
-          )}
-        </div>
-      )}
-      <section className="last-step" aria-labelledby="ask-title">
-        <span className="step" aria-hidden="true">
-          04
-        </span>
-        <div>
-          <h3 id="ask-title">{t.askTitle}</h3>
-          <p>{t.askBody}</p>
-        </div>
-      </section>
+      </VStack>
     </section>
   );
 }
 
-function StatusItem({ label, value }: { label: string; value: string }) {
+// The step number is decorative; the heading order already conveys the sequence.
+function StepBadge({ step }: { step: string }) {
   return (
-    <div className="status-item">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <span aria-hidden="true">
+      <Badge variant="green" label={step} />
+    </span>
+  );
+}
+
+function StepHeader({ step, id, title }: { step: string; id: string; title: string }) {
+  return (
+    <VStack gap={2}>
+      <StepBadge step={step} />
+      <Heading level={3} id={id}>
+        {title}
+      </Heading>
+    </VStack>
+  );
+}
+
+function StatusItem({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "success" | "warning" | "neutral";
+}) {
+  return (
+    <Card padding={4} elevation="low">
+      <VStack gap={1}>
+        <Text type="supporting" color="secondary">
+          {label}
+        </Text>
+        <HStack gap={2} vAlign="center">
+          {tone && (
+            <span aria-hidden="true">
+              <StatusDot variant={tone} label={value} />
+            </span>
+          )}
+          <Text type="large" weight="semibold">
+            {value}
+          </Text>
+        </HStack>
+      </VStack>
+    </Card>
   );
 }
 
@@ -718,20 +836,13 @@ function AddressField({
   onCopy: (value: string) => Promise<void>;
 }) {
   return (
-    <div className="address-field">
-      <label htmlFor={id}>{label}</label>
-      <div className="code-row">
-        <input id={id} readOnly value={value} placeholder={pending} />
-        <button
-          type="button"
-          className="button secondary small"
-          aria-label={copyLabel}
-          disabled={!value}
-          onClick={() => void onCopy(value)}
-        >
-          {copyText}
-        </button>
+    <HStack gap={2} vAlign="end" className="field-row">
+      <div className="field-grow">
+        <TextInput id={id} label={label} isReadOnly value={value} placeholder={pending} width="100%" />
       </div>
-    </div>
+      <Button label={copyLabel} isDisabled={!value} onClick={() => void onCopy(value)}>
+        {copyText}
+      </Button>
+    </HStack>
   );
 }

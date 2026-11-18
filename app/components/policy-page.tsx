@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Text } from "@astryxdesign/core/Text";
 import { PRODUCT_NAME } from "../i18n/dashboard";
 
 export const EFFECTIVE_DATE = "2026-10-26";
@@ -18,14 +20,18 @@ export default function PolicyPage({ title, children }: Readonly<{ title: string
         </Link>
       </header>
       <main id="main" className="policy" lang="en">
-        <h1>{title}</h1>
-        <p className="policy-meta">
+        <Heading level={1} type="display-3">
+          {title}
+        </Heading>
+        <Text as="p" type="supporting" color="secondary" className="policy-meta">
           {PRODUCT_NAME} (formerly Lens MCP for G2) · Effective <time dateTime={EFFECTIVE_DATE}>October 26, 2026</time>
-        </p>
+        </Text>
         {children}
       </main>
-      <footer>
-        <span>{PRODUCT_NAME}</span>
+      <footer className="site-footer">
+        <Text type="supporting" color="secondary">
+          {PRODUCT_NAME}
+        </Text>
         <PolicyLinks />
       </footer>
     </div>

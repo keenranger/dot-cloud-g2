@@ -321,6 +321,8 @@ export default function Dashboard({ displayName, locale }: { displayName: string
       // The server may or may not have replaced the key; show only what it still reports.
       else await syncPairing();
     } finally {
+      // A superseded run sets no focus target; drop its pressed control so a later focus check cannot use it.
+      if (!focusAfterPairing.current) pressedControl.current = null;
       setBusy(false);
     }
   }
@@ -347,6 +349,7 @@ export default function Dashboard({ displayName, locale }: { displayName: string
       if (cause instanceof SessionExpired) dropPairing();
       else await syncPairing();
     } finally {
+      if (!focusAfterPairing.current) pressedControl.current = null;
       setWithdrawing(false);
     }
   }
@@ -472,14 +475,14 @@ export default function Dashboard({ displayName, locale }: { displayName: string
     <section className="dashboard" aria-labelledby="dashboard-title">
       <VStack gap={6}>
         <HStack gap={5} vAlign="center" hAlign="between" wrap="wrap">
-          <VStack gap={1}>
+          <VStack gap={1} className="dashboard-heading">
             <Text as="p" type="label" color="secondary" className="eyebrow">
               {t.eyebrow}
             </Text>
             <Heading level={2} id="dashboard-title">
               {t.title}
             </Heading>
-            <Text as="p" type="supporting" color="secondary" wordBreak="break-word">
+            <Text as="p" type="supporting" color="secondary" className="account">
               {displayName}
             </Text>
           </VStack>

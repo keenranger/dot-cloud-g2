@@ -30,7 +30,12 @@
   --color-background-green: light-dark(#224b381a, #8fc4a326);
   --color-text-green: light-dark(#224b38, #a5d4b6);
   --color-border: light-dark(#dfe3d8, #ffffff17);
-  --color-border-emphasized: light-dark(#c3cbbb, #ffffff2e);
+  /* Input borders: at least 3:1 against cards in both modes (WCAG 1.4.11). */
+  --color-border-emphasized: light-dark(#7f8c83, #66776b);
+  /* Matcha's pure #fd0000 with dark text reads harsh on destructive buttons; a deep red keeps AA contrast. */
+  --color-error: light-dark(#b42318, #f97066);
+  --color-on-error: light-dark(#ffffff, #1f0a08);
+  --color-error-muted: light-dark(#b4231814, #f970661f);
 
   /* Matcha's spacing step is 1.5x the usual 4px grid, which stretched every stack; use the standard grid. */
   --spacing-0-5: 0.125rem;
@@ -53,6 +58,13 @@
   --radius-container: 12px;
   --radius-element: 8px;
   --radius-inner: 4px;
+}
+
+/* Astryx controls draw their own focus ring; plain links and the focusable warning prompts need one too. */
+a:focus-visible,
+[tabindex="-1"]:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 4px;
 }
 
 body {
@@ -208,11 +220,15 @@ body {
 /* Reserves the notice line so announcements do not shift the layout. */
 .feedback {
   min-height: 1.5em;
+  /* Halve the stack gaps around the reserved line so an empty notice does not read as a blank band. */
+  margin-block: calc(-1 * var(--spacing-3));
 }
-/* While empty, stay mounted for screen readers but give back the stack gap instead of leaving a blank band. */
-.feedback:empty {
-  min-height: 0;
-  margin-top: calc(-1 * var(--spacing-6));
+/* A long unbroken account name or email wraps inside the header instead of widening the page. */
+.dashboard-heading {
+  min-width: 0;
+}
+.account {
+  overflow-wrap: anywhere;
 }
 .action-copy {
   flex: 1 1 320px;
@@ -248,8 +264,12 @@ body {
 .policy-meta {
   margin: var(--spacing-2) 0 var(--spacing-8);
 }
+/* Plain h2s: Tailwind's preflight (layer base) outranks the theme's heading sizes (layer reset). */
 .policy h2 {
   margin: 36px 0 10px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 .policy p,
 .policy li {

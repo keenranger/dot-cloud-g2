@@ -13,16 +13,19 @@
       <header class="intro">
         <h1>Dots Lens for G2</h1>
         <p id="lede" class="lede">Ask Dot by voice and read the replies on your glasses.</p>
-        <fieldset class="language">
-          <legend>Language · <span lang="ko">언어</span></legend>
-          <div class="language-options">
-            <label class="choice"
-              ><input id="language-en" type="radio" name="language" value="en" checked />English</label
-            ><label class="choice" lang="ko"
-              ><input id="language-ko" type="radio" name="language" value="ko" />한국어</label
-            >
-          </div>
-        </fieldset>
+        <div class="language">
+          <label id="language-label" for="language">Language</label
+          ><select id="language" autocomplete="off">
+            <option value="en" lang="en">English</option>
+            <option value="de" lang="de">Deutsch</option>
+            <option value="es" lang="es">Español</option>
+            <option value="fr" lang="fr">Français</option>
+            <option value="it" lang="it">Italiano</option>
+            <option value="ja" lang="ja">日本語</option>
+            <option value="ko" lang="ko">한국어</option>
+            <option value="zh" lang="zh-Hans">简体中文</option>
+          </select>
+        </div>
         <p id="status" role="status" aria-live="polite">Checking the Even app connection</p>
       </header>
       <div class="group">
@@ -35,7 +38,6 @@
               type="url"
               required
               value="https://hey-dots-g2.keenranger.chatgpt.site"
-              placeholder="https://your-site.example"
               autocomplete="url"
               autocapitalize="off"
               spellcheck="false"
@@ -203,6 +205,33 @@
           ><button id="next" class="quiet" hidden>Next part on G2</button>
         </div>
         <p id="display" class="field-status" role="status">Not shown on G2 yet</p>
+      </section>
+      <section class="group" aria-labelledby="help-title">
+        <h2 id="help-title">Help and feedback</h2>
+        <p id="help-note" class="note">
+          The project's GitHub page has the usage guide and source. Ask questions or request features in GitHub Issues.
+        </p>
+        <div class="actions">
+          <a
+            id="guide-link"
+            class="dashboard-link quiet"
+            href="https://github.com/keenranger/dot-cloud-g2"
+            target="_blank"
+            rel="noopener noreferrer"
+            referrerpolicy="no-referrer"
+            ><span id="guide-link-text">Usage guide and source</span>
+            <span id="guide-link-note" class="link-note">(opens GitHub in your browser)</span></a
+          ><a
+            id="help-link"
+            class="dashboard-link quiet"
+            href="https://github.com/keenranger/dot-cloud-g2/issues"
+            target="_blank"
+            rel="noopener noreferrer"
+            referrerpolicy="no-referrer"
+            ><span id="help-link-text">Questions and feature requests</span>
+            <span id="help-link-note" class="link-note">(opens GitHub in your browser)</span></a
+          >
+        </div>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

@@ -60,6 +60,29 @@
   --radius-inner: 4px;
 }
 
+/* Astryx buttons keep labels on one line and truncate them. Long translations at 320px or enlarged text must wrap
+   instead (WCAG 1.4.10), as the 0.8.0 buttons did; the control grows taller rather than hiding words. */
+.astryx-button {
+  height: auto;
+  min-height: var(--size-element-md, 2.25rem);
+  max-width: 100%;
+  padding-block: var(--spacing-1);
+  white-space: normal;
+  text-align: center;
+}
+.astryx-button[data-size="sm"] {
+  min-height: var(--size-element-sm, 2rem);
+}
+.astryx-button[data-size="lg"] {
+  min-height: var(--size-element-lg, 2.75rem);
+}
+.astryx-button span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
 /* Astryx controls draw their own focus ring; plain links and the focusable warning prompts need one too. */
 a:focus-visible,
 [tabindex="-1"]:focus-visible {

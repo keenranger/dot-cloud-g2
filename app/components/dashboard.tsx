@@ -668,7 +668,7 @@ export default function Dashboard({ displayName, locale }: { displayName: string
             </VStack>
           </Card>
         </Grid>
-        <Card role="region" aria-labelledby="stt-title" variant="yellow" padding={6}>
+        <Card role="region" aria-labelledby="stt-title" variant="muted" padding={6}>
           <VStack gap={3}>
             <StepHeader step="03" id="stt-title" title={t.speechTitle} />
             <Text as="p" color="secondary">
